@@ -12,6 +12,7 @@ import { parseSlackflowCommand, type SlackflowCommand } from "./slack-command.js
 import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
 import { WebflowMcpConnection } from "./webflow-mcp.js";
+import { renderWebflowOAuthPage } from "./webflow-oauth-page.js";
 
 const app = new App({
   appToken: config.slack.appToken,
@@ -167,12 +168,13 @@ function safeWebflowReadError(error: unknown): string {
 }
 
 async function handleConnectCommand(client: WebClient, channel: string, threadTs: string, user: string): Promise<void> {
-  const result = webflowConnection.createConnectionLink();
+  const result = webflowConnection.createConnectionLink({ channel, threadTs });
 
   if ("error" in result) {
     await client.chat.postEphemeral({
       channel,
       text: `Webflow MCP cannot start: ${result.error}`,
+      thread_ts: threadTs,
       user
     });
     return;
@@ -231,13 +233,32 @@ async function handleHttpRequest(request: import("node:http").IncomingMessage, r
     try {
       const requestId = requestUrl.searchParams.get("request");
       if (!requestId) throw new Error("Missing Webflow connection request.");
-      await webflowConnection.completeAuthorization(requestId, requestUrl.searchParams);
+      const slackContext = await webflowConnection.completeAuthorization(requestId, requestUrl.searchParams);
+      if (slackContext) {
+        try {
+          await app.client.chat.postMessage({
+            channel: slackContext.channel,
+            thread_ts: slackContext.threadTs,
+            text: ":white_check_mark: *Webflow connected*\nSlackflow stored the encrypted OAuth connection. Next, run `@slackflow schema` in this thread to choose the target website and CMS collection."
+          });
+        } catch {
+          app.logger.error("Webflow OAuth completed but Slackflow could not post the thread confirmation");
+        }
+      }
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-      response.end("<h1>Webflow connected</h1><p>You can return to Slack and run @slackflow status.</p>");
+      response.end(renderWebflowOAuthPage({
+        detail: "Slackflow has securely saved the connection and posted a confirmation in your original Slack thread. Return there to choose the website and CMS collection.",
+        heading: "Webflow is connected",
+        success: true
+      }));
     } catch (error) {
       app.logger.error("Failed to complete Webflow OAuth");
       response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
-      response.end("<h1>Webflow connection could not finish</h1><p>Return to Slack and run @slackflow connect again.</p>");
+      response.end(renderWebflowOAuthPage({
+        detail: "Return to Slack and run @slackflow connect again. No Webflow content was changed.",
+        heading: "Webflow connection could not finish",
+        success: false
+      }));
     }
     return;
   }

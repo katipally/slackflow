@@ -20,6 +20,12 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 
 type PendingMetadata = {
   expiresAt: number;
+  slackContext?: { channel: string; threadTs: string };
+};
+
+export type WebflowConnectionContext = {
+  channel: string;
+  threadTs: string;
 };
 
 type ConnectionMetadata = {
@@ -174,13 +180,13 @@ export class WebflowMcpConnection {
     this.store = this.configurationError ? undefined : new WebflowConnectionStore(config.statePath, config.tokenEncryptionKey);
   }
 
-  createConnectionLink(): { link: string } | { error: string } {
+  createConnectionLink(slackContext?: WebflowConnectionContext): { link: string } | { error: string } {
     if (!this.store || this.configurationError) {
       return { error: this.configurationError ?? "Webflow MCP is not configured." };
     }
 
     const requestId = randomValue();
-    this.store.set(this.pendingSession(requestId), "metadata", { expiresAt: Date.now() + PENDING_TTL_MS } satisfies PendingMetadata);
+    this.store.set(this.pendingSession(requestId), "metadata", { expiresAt: Date.now() + PENDING_TTL_MS, slackContext } satisfies PendingMetadata);
 
     const link = new URL("/webflow/connect", this.config.publicBaseUrl);
     link.searchParams.set("request", requestId);
@@ -221,9 +227,9 @@ export class WebflowMcpConnection {
     return authorizationUrl;
   }
 
-  async completeAuthorization(requestId: string, callbackParams: URLSearchParams): Promise<void> {
+  async completeAuthorization(requestId: string, callbackParams: URLSearchParams): Promise<WebflowConnectionContext | undefined> {
     const store = this.requireStore();
-    this.requirePendingRequest(requestId);
+    const pendingMetadata = this.requirePendingRequest(requestId);
 
     if (!callbackParams.get("code") || callbackParams.get("error")) {
       throw new Error("Webflow authorization was not completed.");
@@ -261,6 +267,7 @@ export class WebflowMcpConnection {
 
       await authenticatedTransport.terminateSession().catch(() => undefined);
       await pending.client.close();
+      return pendingMetadata.slackContext;
     } finally {
       this.pendingConnections.delete(requestId);
       store.removeSession(this.pendingSession(requestId));
@@ -389,13 +396,15 @@ export class WebflowMcpConnection {
     return `${PENDING_PREFIX}${requestId}`;
   }
 
-  private requirePendingRequest(requestId: string): void {
+  private requirePendingRequest(requestId: string): PendingMetadata {
     const metadata = this.requireStore().get<PendingMetadata>(this.pendingSession(requestId), "metadata");
 
     if (!metadata || metadata.expiresAt < Date.now()) {
       this.requireStore().removeSession(this.pendingSession(requestId));
       throw new Error("Webflow connection link expired. Start @slackflow connect again.");
     }
+
+    return metadata;
   }
 
   private requireStore(): WebflowConnectionStore {
