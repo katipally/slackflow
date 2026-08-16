@@ -312,15 +312,15 @@ export class WebflowMcpConnection {
 
   /** These reads are intentionally the only CMS operations enabled at this stage. */
   async listSites(): Promise<WebflowToolData> {
-    return this.callTool("data_sites_tool", { actions: [{ action: "list_sites" }] });
+    return this.callTool("data_sites_tool", { actions: [{ list_sites: {} }] });
   }
 
   async listCollections(siteId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { actions: [{ action: "get_collection_list", siteId }] });
+    return this.callTool("data_cms_tool", { actions: [{ get_collection_list: { siteId } }] });
   }
 
   async getCollectionDetails(collectionId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { actions: [{ action: "get_collection_details", collection_id: collectionId }] });
+    return this.callTool("data_cms_tool", { actions: [{ get_collection_details: { collection_id: collectionId } }] });
   }
 
   saveSchema(siteId: string, collectionId: string, schema: unknown): void {
