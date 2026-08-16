@@ -29,11 +29,14 @@ export function formatProposalPreview(proposal: DraftProposal, messageCount: num
     `• Thread context at invocation: ${messageCount} source messages`,
     `• Mode: ${proposal.mode}`,
     `• Status: *${proposal.status}*`,
-    `• Title: ${previewValue(proposal.fields.title, 180)}`,
-    `• Body preview: ${previewValue(proposal.fields.body_markdown, 600)}`,
+    "*Draft values for approval*",
+    `• Name / title: ${previewValue(proposal.fields.title, 180)}`,
+    `• Post body: ${previewValue(proposal.fields.body_markdown, 600)}`,
+    "• Full post body: attached strict-transfer Markdown file",
     `• Publication date: ${previewValue(proposal.fields.publication_date, 80)}`,
     `• Source URL: ${previewValue(proposal.fields.source_url, 240)}`,
-    `• Webflow Tag: ${previewValue(proposal.fields.tag, 80, "Needs classification")}`,
+    `• Tag: ${previewValue(proposal.fields.tag, 80, "Needs classification")}`,
+    "• Blog image: attached 1920×1080 image",
     `• Thumbnail brief: ${previewValue(proposal.fields.thumbnail_brief, 220)}`,
     `• Banner brief: ${previewValue(proposal.fields.banner_brief, 220)}`,
     `• Exact body source segments: ${proposal.source_selections.body_markdown.length}`
@@ -78,6 +81,6 @@ export function formatProposalPreview(proposal: DraftProposal, messageCount: num
     lines.push(`• Explicitly blank: ${proposal.explicitly_blank.map(escapeSlackText).join(", ")}`);
   }
 
-  lines.push("Webflow CMS mapping and creation remain disabled until Slackflow reads the approved collection schema.");
+  lines.push("Webflow CMS mapping and creation remain disabled until Slackflow reads the selected collection schema. After that, the approval card will show every actual CMS field Slackflow will fill and every field it will leave blank.");
   return lines.join("\n");
 }

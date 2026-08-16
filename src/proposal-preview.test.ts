@@ -43,8 +43,9 @@ test("shows exact transfer-source timestamps and escapes Slack markup", () => {
   assert.match(preview, /Title source ← 1710000001.000000/);
   assert.match(preview, /Body source 1 ← 1710000001.000000/);
   assert.match(preview, /Exact body source segments: 1/);
-  assert.match(preview, /Webflow Tag: AI Industry/);
+  assert.match(preview, /Tag: AI Industry/);
+  assert.match(preview, /Full post body: attached strict-transfer Markdown file/);
   assert.match(preview, /Tag rationale: The source concerns the AI industry. ← 1710000001.000000/);
   assert.match(preview, /&lt;@U123&gt; &amp; details/);
-  assert.match(preview, /Webflow CMS mapping and creation remain disabled/);
+  assert.match(preview, /approval card will show every actual CMS field/);
 });

@@ -102,7 +102,7 @@ function choicesFromWebflowData(value: unknown): WebflowChoice[] {
   };
 
   visit(value);
-  return [...choices.entries()].slice(0, 25).map(([id, label]) => ({ id, label }));
+  return [...choices.entries()].slice(0, 100).map(([id, label]) => ({ id, label }));
 }
 
 function fieldLabelsFromWebflowData(value: unknown): string[] {
@@ -131,12 +131,15 @@ function schemaSelectionBlocks(heading: string, prompt: string, actionId: string
     { type: "section" as const, text: { type: "mrkdwn" as const, text: prompt } },
     {
       type: "actions" as const,
-      elements: choices.map((choice) => ({
-        type: "button" as const,
+      elements: [{
+        type: "static_select" as const,
         action_id: actionId,
-        text: { type: "plain_text" as const, text: choice.label.slice(0, 75), emoji: true },
-        value: valueFor(choice)
-      }))
+        placeholder: { type: "plain_text" as const, text: heading.slice(0, 150), emoji: true },
+        options: choices.map((choice) => ({
+          text: { type: "plain_text" as const, text: choice.label.slice(0, 75), emoji: true },
+          value: valueFor(choice)
+        }))
+      }]
     }
   ];
 }
@@ -149,10 +152,21 @@ function actionContext(body: unknown): { channel: string; threadTs?: string; use
 }
 
 function actionValue(action: unknown): string | undefined {
-  return action && typeof action === "object" && "value" in action && typeof action.value === "string" ? action.value : undefined;
+  if (!action || typeof action !== "object") return undefined;
+  const value = action as { selected_option?: { value?: unknown }; value?: unknown };
+  if (typeof value.value === "string") return value.value;
+  return typeof value.selected_option?.value === "string" ? value.selected_option.value : undefined;
 }
 
-async function handleConnectCommand(client: WebClient, channel: string, user: string): Promise<void> {
+function safeWebflowReadError(error: unknown): string {
+  const message = error instanceof Error ? error.message : "Unknown Webflow MCP error.";
+  return message
+    .replace(/(access[_-]?token|refresh[_-]?token|authorization|bearer)\s*[:=]\s*[^\s,]+/gi, "$1=[redacted]")
+    .replace(/https?:\/\/\S+/g, "[URL redacted]")
+    .slice(0, 350);
+}
+
+async function handleConnectCommand(client: WebClient, channel: string, threadTs: string, user: string): Promise<void> {
   const result = webflowConnection.createConnectionLink();
 
   if ("error" in result) {
@@ -184,6 +198,7 @@ async function handleConnectCommand(client: WebClient, channel: string, user: st
     ],
     channel,
     text: `Open this one-time Webflow connection link: ${result.link}`,
+    thread_ts: threadTs,
     user
   });
 }
@@ -262,7 +277,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       if (!event.user) {
         throw new Error("Slack did not provide the user who requested Webflow OAuth.");
       }
-      await handleConnectCommand(client, event.channel, event.user);
+      await handleConnectCommand(client, event.channel, rootTs, event.user);
     } catch (error) {
       logger.error(error, "Failed to send Webflow OAuth link");
       await client.chat.postMessage({
@@ -300,6 +315,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       }
       await client.chat.postEphemeral({
         channel: event.channel,
+        thread_ts: rootTs,
         user: event.user,
         text: "Choose the Webflow site whose CMS Slackflow should inspect. This is read-only.",
         blocks: schemaSelectionBlocks("Choose a Webflow site", "This read-only step will list its CMS collections. It will not create, edit, or publish anything.", "slackflow_select_site", sites, (site) => site.id)
@@ -308,7 +324,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       logger.error(error, "Failed to read Webflow sites");
       await client.chat.postMessage({
         channel: event.channel,
-        text: ":warning: Slackflow could not read your Webflow sites. No CMS change was made. Check that Webflow is connected, then run `@slackflow schema` again.",
+        text: `:warning: Slackflow could not read your Webflow sites. No CMS change was made.\n*Reason:* ${safeWebflowReadError(error)}\nIf this says OAuth is no longer valid, run \`@slackflow connect\` again, complete the browser flow, then retry \`@slackflow schema\`.`,
         thread_ts: rootTs
       });
     }
@@ -452,7 +468,7 @@ app.action("slackflow_select_site", async ({ ack, action, body, client, logger }
     });
   } catch (error) {
     logger.error(error, "Failed to read Webflow CMS collections");
-    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: ":warning: Slackflow could not read CMS collections. No CMS change was made. Run `@slackflow schema` and try again." });
+    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: `:warning: Slackflow could not read CMS collections. No CMS change was made.\n*Reason:* ${safeWebflowReadError(error)}\nRun \`@slackflow schema\` and try again.` });
   }
 });
 
@@ -482,7 +498,7 @@ app.action("slackflow_select_collection", async ({ ack, action, body, client, lo
     });
   } catch (error) {
     logger.error(error, "Failed to read Webflow CMS collection schema");
-    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: ":warning: Slackflow could not read this CMS collection schema. No CMS change was made. Run `@slackflow schema` and try again." });
+    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: `:warning: Slackflow could not read this CMS collection schema. No CMS change was made.\n*Reason:* ${safeWebflowReadError(error)}\nRun \`@slackflow schema\` and try again.` });
   }
 });
 

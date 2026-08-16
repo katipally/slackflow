@@ -335,6 +335,7 @@ export class WebflowMcpConnection {
 
     try {
       await client.connect(transport);
+      await this.ensureTool(client, name);
       const result = await client.callTool({ arguments: args, name });
       const text = result.content
         .filter((item): item is { type: "text"; text: string } => item.type === "text")
@@ -354,6 +355,33 @@ export class WebflowMcpConnection {
     } finally {
       await transport.terminateSession().catch(() => undefined);
       await client.close().catch(() => undefined);
+    }
+  }
+
+  private async ensureTool(client: Client, requiredTool: string): Promise<void> {
+    const available = await client.listTools();
+    if (available.tools.some((tool) => tool.name === requiredTool)) return;
+
+    if (!available.tools.some((tool) => tool.name === "get_more_tools")) {
+      throw new Error(`Webflow MCP did not make the required ${requiredTool} tool available.`);
+    }
+
+    const result = await client.callTool({
+      name: "get_more_tools",
+      arguments: {
+        brief: `Read-only Slackflow CMS discovery needs ${requiredTool}.`,
+        category: "data",
+        context: "Slackflow only lists sites and reads CMS collection schemas. It does not create, edit, publish, or delete Webflow content."
+      }
+    });
+
+    if (result.isError) {
+      throw new Error("Webflow MCP could not load its required read-only data tool.");
+    }
+
+    const refreshed = await client.listTools();
+    if (!refreshed.tools.some((tool) => tool.name === requiredTool)) {
+      throw new Error(`Webflow MCP did not provide the required ${requiredTool} tool.`);
     }
   }
 
