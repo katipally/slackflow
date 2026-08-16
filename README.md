@@ -16,7 +16,7 @@ Use it inside a Slack thread:
 | `@slackflow help` | Yes | Shows this command set in Slack. |
 | `@slackflow status` | Yes | Shows the current Slackflow and Webflow connection state without exposing secrets. |
 | `@slackflow connect` | Yes, after Render configuration | Sends a private one-time Webflow OAuth link. |
-| `@slackflow schema` | Recognized | Explains that schema discovery is unavailable until Webflow MCP is connected. |
+| `@slackflow schema` | Yes, after Webflow connection | Lets you choose a Webflow site and CMS collection, then reads its schema only. |
 | `@slackflow disconnect` | Yes | Removes Slackflow's encrypted local Webflow connection. It does not revoke the OAuth grant in Webflow. |
 
 Only exact compact commands are accepted. For example, `@slackflow create a Webflow draft` does not trigger any action.
@@ -34,7 +34,7 @@ If the thread does not contain enough exact source text, Slackflow returns `need
 
 ## Webflow MCP status
 
-Slackflow now contains the OAuth connection flow for Webflow MCP. It has not yet been tested against your Webflow account, and CMS schema reading and Webflow draft creation are still disabled. The MCP endpoint is:
+Slackflow's Webflow OAuth connection has been verified with this Webflow account. `@slackflow schema` can now read a chosen site's collection list and one collection's exact schema. It does not create, edit, publish, or otherwise change Webflow content. The MCP endpoint is:
 
 ```text
 https://mcp.webflow.com/mcp
@@ -50,6 +50,11 @@ The planned flow is simple:
 
 @slackflow draft
   -> Review the exact transferred draft and image in Slack
+  -> No Webflow CMS action yet
+
+@slackflow schema
+  -> Choose the correct Webflow site and CMS collection
+  -> Read its real fields, types, and validation rules
   -> No Webflow CMS action yet
 ```
 
@@ -168,7 +173,7 @@ Render Free has an ephemeral filesystem. The local SQLite run ledger can be lost
 
 Slackflow uses the MCP TypeScript client and Webflow's OAuth server. The local SQLite store encrypts OAuth tokens, dynamic client information, PKCE data, and OAuth discovery state using `WEBFLOW_TOKEN_ENCRYPTION_KEY`. The one-time browser link expires after ten minutes.
 
-Slackflow will use Webflow MCP through deterministic application code, not as unrestricted model tools. The current code establishes OAuth only. A later schema feature will read the exact CMS collection schema and map only fields that exist in that schema. It will stop if a required field has no valid value.
+Slackflow uses Webflow MCP through deterministic application code, not as unrestricted model tools. The current code can connect and read an exact CMS collection schema. A later create feature will map only fields that exist in that schema and stop if a required field has no valid value.
 
 The future writer will create a CMS item as a draft only and then verify it. It will not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the full technical contract.
 

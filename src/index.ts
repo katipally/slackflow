@@ -43,7 +43,7 @@ function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect
         "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, and one Blog Image in this thread.",
         "• `@slackflow status` shows the current Slackflow and Webflow state.",
         "• `@slackflow connect` sends a private one-time Webflow OAuth link.",
-        "• `@slackflow schema` is reserved for read-only CMS schema discovery.",
+        "• `@slackflow schema` reads a selected Webflow CMS schema only.",
         "• `@slackflow disconnect` removes Slackflow's encrypted local Webflow connection.",
         "Webflow writes are disabled."
       ].join("\n");
@@ -70,9 +70,86 @@ function webflowStatusReply(): string {
     if (status.serverName) lines.push(`• Webflow MCP server: ${status.serverName}${status.serverVersion ? ` ${status.serverVersion}` : ""}`);
   }
 
-  lines.push("• Webflow CMS schema: not read");
+  const schema = webflowConnection.schemaStatus();
+  lines.push(schema.state === "read"
+    ? `• Webflow CMS schema: read for collection ${schema.collectionId} at ${new Date(schema.readAt).toISOString()}`
+    : "• Webflow CMS schema: not read");
   lines.push("• Webflow writes and publishing: disabled");
   return lines.join("\n");
+}
+
+type WebflowChoice = { id: string; label: string };
+
+function choicesFromWebflowData(value: unknown): WebflowChoice[] {
+  const choices = new Map<string, string>();
+  const seen = new Set<unknown>();
+
+  const visit = (item: unknown): void => {
+    if (!item || typeof item !== "object" || seen.has(item)) return;
+    seen.add(item);
+
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : undefined;
+    const label = [record.displayName, record.name, record.shortName, record.slug]
+      .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+    if (id && label) choices.set(id, label.trim());
+    Object.values(record).forEach(visit);
+  };
+
+  visit(value);
+  return [...choices.entries()].slice(0, 25).map(([id, label]) => ({ id, label }));
+}
+
+function fieldLabelsFromWebflowData(value: unknown): string[] {
+  const fields = new Set<string>();
+  const seen = new Set<unknown>();
+  const visit = (item: unknown): void => {
+    if (!item || typeof item !== "object" || seen.has(item)) return;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      item.forEach(visit);
+      return;
+    }
+    const record = item as Record<string, unknown>;
+    const label = [record.displayName, record.name, record.slug]
+      .find((candidate): candidate is string => typeof candidate === "string" && candidate.trim().length > 0);
+    if (label && typeof record.type === "string") fields.add(label.trim());
+    Object.values(record).forEach(visit);
+  };
+  visit(value);
+  return [...fields].slice(0, 20);
+}
+
+function schemaSelectionBlocks(heading: string, prompt: string, actionId: string, choices: WebflowChoice[], valueFor: (choice: WebflowChoice) => string) {
+  return [
+    { type: "header" as const, text: { type: "plain_text" as const, text: heading, emoji: true } },
+    { type: "section" as const, text: { type: "mrkdwn" as const, text: prompt } },
+    {
+      type: "actions" as const,
+      elements: choices.map((choice) => ({
+        type: "button" as const,
+        action_id: actionId,
+        text: { type: "plain_text" as const, text: choice.label.slice(0, 75), emoji: true },
+        value: valueFor(choice)
+      }))
+    }
+  ];
+}
+
+function actionContext(body: unknown): { channel: string; threadTs?: string; user: string } | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = body as { channel?: { id?: unknown }; container?: { thread_ts?: unknown }; user?: { id?: unknown } };
+  if (typeof value.channel?.id !== "string" || typeof value.user?.id !== "string") return undefined;
+  return { channel: value.channel.id, threadTs: typeof value.container?.thread_ts === "string" ? value.container.thread_ts : undefined, user: value.user.id };
+}
+
+function actionValue(action: unknown): string | undefined {
+  return action && typeof action === "object" && "value" in action && typeof action.value === "string" ? action.value : undefined;
 }
 
 async function handleConnectCommand(client: WebClient, channel: string, user: string): Promise<void> {
@@ -214,6 +291,31 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
     return;
   }
 
+  if (command === "schema") {
+    try {
+      if (!event.user) throw new Error("Slack did not provide the user who requested CMS discovery.");
+      const sites = choicesFromWebflowData((await webflowConnection.listSites()).data);
+      if (sites.length === 0) {
+        throw new Error("Webflow returned no selectable sites.");
+      }
+      await client.chat.postEphemeral({
+        channel: event.channel,
+        user: event.user,
+        text: "Choose the Webflow site whose CMS Slackflow should inspect. This is read-only.",
+        blocks: schemaSelectionBlocks("Choose a Webflow site", "This read-only step will list its CMS collections. It will not create, edit, or publish anything.", "slackflow_select_site", sites, (site) => site.id)
+      });
+    } catch (error) {
+      logger.error(error, "Failed to read Webflow sites");
+      await client.chat.postMessage({
+        channel: event.channel,
+        text: ":warning: Slackflow could not read your Webflow sites. No CMS change was made. Check that Webflow is connected, then run `@slackflow schema` again.",
+        thread_ts: rootTs
+      });
+    }
+    runStore.mark(body.event_id, "completed");
+    return;
+  }
+
   if (command !== "draft") {
     await client.chat.postMessage({
       channel: event.channel,
@@ -329,6 +431,58 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       text: ":warning: Slackflow could not prepare a draft proposal. No Webflow changes were made. Check the local terminal for the error details.",
       thread_ts: rootTs
     });
+  }
+});
+
+app.action("slackflow_select_site", async ({ ack, action, body, client, logger }) => {
+  await ack();
+  const context = actionContext(body);
+  const siteId = actionValue(action);
+  if (!context || !siteId) return;
+
+  try {
+    const collections = choicesFromWebflowData((await webflowConnection.listCollections(siteId)).data);
+    if (collections.length === 0) throw new Error("Webflow returned no selectable CMS collections.");
+    await client.chat.postEphemeral({
+      channel: context.channel,
+      user: context.user,
+      thread_ts: context.threadTs,
+      text: "Choose the CMS collection Slackflow should inspect. This is read-only.",
+      blocks: schemaSelectionBlocks("Choose a CMS collection", "Slackflow will read its exact fields and validation rules. It will not create, edit, or publish anything.", "slackflow_select_collection", collections, (collection) => JSON.stringify({ collectionId: collection.id, siteId }))
+    });
+  } catch (error) {
+    logger.error(error, "Failed to read Webflow CMS collections");
+    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: ":warning: Slackflow could not read CMS collections. No CMS change was made. Run `@slackflow schema` and try again." });
+  }
+});
+
+app.action("slackflow_select_collection", async ({ ack, action, body, client, logger }) => {
+  await ack();
+  const context = actionContext(body);
+  const value = actionValue(action);
+  if (!context || !value) return;
+
+  try {
+    const selection = JSON.parse(value) as { collectionId?: unknown; siteId?: unknown };
+    if (typeof selection.collectionId !== "string" || typeof selection.siteId !== "string") throw new Error("Invalid CMS collection selection.");
+    const details = await webflowConnection.getCollectionDetails(selection.collectionId);
+    webflowConnection.saveSchema(selection.siteId, selection.collectionId, details.data);
+    const fields = fieldLabelsFromWebflowData(details.data);
+    const fieldsText = fields.length ? fields.map((field) => `• ${field}`).join("\n") : "• Webflow returned the collection schema, but Slackflow could not summarize its fields.";
+    await client.chat.postEphemeral({
+      channel: context.channel,
+      user: context.user,
+      thread_ts: context.threadTs,
+      text: "Slackflow captured the Webflow CMS schema. CMS writes are still disabled.",
+      blocks: [
+        { type: "header", text: { type: "plain_text", text: "CMS schema captured", emoji: true } },
+        { type: "section", text: { type: "mrkdwn", text: `*Collection ID:* \`${selection.collectionId}\`\n*Fields found:*\n${fieldsText}` } },
+        { type: "section", text: { type: "mrkdwn", text: "Next, Slackflow will validate a fixed field mapping against this exact schema. It will not create a CMS item until that mapping is complete and you explicitly confirm the draft." } }
+      ]
+    });
+  } catch (error) {
+    logger.error(error, "Failed to read Webflow CMS collection schema");
+    await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: ":warning: Slackflow could not read this CMS collection schema. No CMS change was made. Run `@slackflow schema` and try again." });
   }
 });
 

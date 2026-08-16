@@ -28,6 +28,11 @@ type ConnectionMetadata = {
   serverVersion?: string;
 };
 
+export type WebflowToolData = {
+  data: unknown;
+  text: string;
+};
+
 type PendingConnection = {
   client: Client;
   provider: WebflowOAuthProvider;
@@ -286,12 +291,70 @@ export class WebflowMcpConnection {
     return { state: "not_connected" };
   }
 
+  /** These reads are intentionally the only CMS operations enabled at this stage. */
+  async listSites(): Promise<WebflowToolData> {
+    return this.callTool("data_sites_tool", { action: "list_sites" });
+  }
+
+  async listCollections(siteId: string): Promise<WebflowToolData> {
+    return this.callTool("data_cms_tool", { action: "get_collection_list", siteId });
+  }
+
+  async getCollectionDetails(collectionId: string): Promise<WebflowToolData> {
+    return this.callTool("data_cms_tool", { action: "get_collection_details", collection_id: collectionId });
+  }
+
+  saveSchema(siteId: string, collectionId: string, schema: unknown): void {
+    const store = this.requireConnectedStore();
+    store.set(CONNECTION_SESSION, "cms_schema", schema);
+    store.set(CONNECTION_SESSION, "cms_schema_metadata", { collectionId, readAt: Date.now(), siteId });
+  }
+
+  schemaStatus(): { state: "not_read" } | { state: "read"; collectionId: string; readAt: number; siteId: string } {
+    if (!this.store || this.configurationError) return { state: "not_read" };
+
+    const metadata = this.store.get<{ collectionId?: string; readAt?: number; siteId?: string }>(CONNECTION_SESSION, "cms_schema_metadata");
+    if (!metadata?.collectionId || !metadata.readAt || !metadata.siteId) return { state: "not_read" };
+    return { state: "read", collectionId: metadata.collectionId, readAt: metadata.readAt, siteId: metadata.siteId };
+  }
+
   private createClient(): Client {
     return new Client({ name: "slackflow", version: "0.1.0" });
   }
 
   private createTransport(provider: WebflowOAuthProvider): StreamableHTTPClientTransport {
     return new StreamableHTTPClientTransport(new URL(this.config.mcpUrl), { authProvider: provider });
+  }
+
+  private async callTool(name: string, args: Record<string, unknown>): Promise<WebflowToolData> {
+    const store = this.requireConnectedStore();
+    const callbackUrl = new URL("/webflow/oauth/callback", this.config.publicBaseUrl).toString();
+    const provider = new WebflowOAuthProvider(store, CONNECTION_SESSION, callbackUrl);
+    const transport = this.createTransport(provider);
+    const client = this.createClient();
+
+    try {
+      await client.connect(transport);
+      const result = await client.callTool({ arguments: args, name });
+      const text = result.content
+        .filter((item): item is { type: "text"; text: string } => item.type === "text")
+        .map((item) => item.text)
+        .join("\n");
+
+      if (result.isError) {
+        throw new Error(text || "Webflow MCP could not complete the read-only request.");
+      }
+
+      return { data: result.structuredContent ?? parseJson(text), text };
+    } catch (error) {
+      if (UnauthorizedError.isInstance(error)) {
+        throw new Error("Webflow OAuth is no longer valid. Run @slackflow connect again.");
+      }
+      throw error;
+    } finally {
+      await transport.terminateSession().catch(() => undefined);
+      await client.close().catch(() => undefined);
+    }
   }
 
   private pendingSession(requestId: string): string {
@@ -313,5 +376,22 @@ export class WebflowMcpConnection {
     }
 
     return this.store;
+  }
+
+  private requireConnectedStore(): WebflowConnectionStore {
+    const status = this.status();
+    if (status.state !== "connected") {
+      throw new Error(status.state === "configuration_missing" ? status.message : "Webflow is not connected. Run @slackflow connect first.");
+    }
+
+    return this.requireStore();
+  }
+}
+
+function parseJson(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
   }
 }
