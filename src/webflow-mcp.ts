@@ -40,6 +40,19 @@ export type WebflowToolData = {
   text: string;
 };
 
+/**
+ * The hosted Webflow data tools require both an overall context and a label for
+ * each requested action. Keeping that contract in one small helper prevents a
+ * later read from silently omitting either required field.
+ */
+export function createWebflowDataToolRequest(
+  context: string,
+  label: string,
+  action: Record<string, unknown>
+): Record<string, unknown> {
+  return { actions: [{ label, ...action }], context };
+}
+
 type PendingConnection = {
   client: Client;
   provider: WebflowOAuthProvider;
@@ -312,15 +325,36 @@ export class WebflowMcpConnection {
 
   /** These reads are intentionally the only CMS operations enabled at this stage. */
   async listSites(): Promise<WebflowToolData> {
-    return this.callTool("data_sites_tool", { actions: [{ list_sites: {} }] });
+    return this.callTool(
+      "data_sites_tool",
+      createWebflowDataToolRequest(
+        "Slackflow lists accessible Webflow sites so the user can choose the target site for CMS draft setup.",
+        "List accessible Webflow sites",
+        { list_sites: {} }
+      )
+    );
   }
 
   async listCollections(siteId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { actions: [{ get_collection_list: { siteId } }] });
+    return this.callTool(
+      "data_cms_tool",
+      createWebflowDataToolRequest(
+        "Slackflow lists CMS collections in the selected site so the user can choose the target collection safely.",
+        "List CMS collections",
+        { get_collection_list: { siteId } }
+      )
+    );
   }
 
   async getCollectionDetails(collectionId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { actions: [{ get_collection_details: { collection_id: collectionId } }] });
+    return this.callTool(
+      "data_cms_tool",
+      createWebflowDataToolRequest(
+        "Slackflow reads the selected CMS collection fields to validate the draft mapping before any content is created.",
+        "Read selected CMS collection fields",
+        { get_collection_details: { collection_id: collectionId } }
+      )
+    );
   }
 
   saveSchema(siteId: string, collectionId: string, schema: unknown): void {

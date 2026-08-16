@@ -1,9 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { WebflowMcpConnection } from "./webflow-mcp.js";
+import { createWebflowDataToolRequest, WebflowMcpConnection } from "./webflow-mcp.js";
 
 const encryptionKey = Buffer.alloc(32, 9).toString("base64");
+
+test("builds hosted Webflow data-tool requests with required context and action label", () => {
+  assert.deepEqual(
+    createWebflowDataToolRequest("List sites for target selection.", "List accessible Webflow sites", { list_sites: {} }),
+    {
+      actions: [{ label: "List accessible Webflow sites", list_sites: {} }],
+      context: "List sites for target selection."
+    }
+  );
+});
 
 test("requires a complete secure configuration before creating a Webflow OAuth link", () => {
   const connection = new WebflowMcpConnection({
