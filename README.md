@@ -1,58 +1,174 @@
----
-title: Slackflow
-emoji: "💬"
-colorFrom: blue
-colorTo: purple
-sdk: docker
-app_port: 7860
----
-
 # Slackflow
 
-Slackflow is a Slack agent that will turn the full context of an invoked Slack thread into a reviewed Webflow CMS draft.
+Slackflow reads the full context of a Slack thread and prepares a blog draft for review.
 
-## Current milestone
+Use it inside a Slack thread:
 
-The local bot runs in Slack Socket Mode and responds to an in-thread `@Slackflow draft` mention by fetching the complete thread up to that mention and producing a no-write, structured draft proposal. It uses a provider-neutral model interface; the initial adapter sends one direct native-`fetch` request to the OpenAI Responses API with `gpt-5.6-luna`. It has no OpenAI SDK, agent framework, tools, or Webflow connection.
+```text
+@slackflow draft
+```
 
-Slackflow uses a **strict transfer** design. The model cannot supply `title`, `body_markdown`, dates, URLs, or image briefs directly. It may only select exact character-for-character text spans from captured Slack messages; Slackflow verifies each selected span locally and derives the displayed fields itself. It rejects fabricated text, reordered body spans, unknown source messages, and the retired `compose` mode. If exact source title/body text is unavailable, it returns `needs_input` instead of writing a draft.
+## Commands
 
-The only editorial classification is a closed, auditable Webflow Tag taxonomy: `NLP Labeling`, `Labeling`, `AI Industry`, or `Datasaur`. It returns `needs_input` rather than inventing a required tag when the article cannot be classified confidently.
+| Command | Available now | Result |
+| --- | --- | --- |
+| `@slackflow draft` | Yes | Creates the strict-transfer Slack review, Markdown file, and image preview. It does not write to Webflow. |
+| `@slackflow help` | Yes | Shows this command set in Slack. |
+| `@slackflow status` | Yes | Shows the current Slackflow and Webflow connection state without exposing secrets. |
+| `@slackflow connect` | Recognized | Explains that Webflow OAuth is not implemented yet. It does not create a connection. |
+| `@slackflow schema` | Recognized | Explains that schema discovery is unavailable until Webflow MCP is connected. |
+| `@slackflow disconnect` | Recognized | Explains that there is no stored Webflow connection yet. |
 
-The repository also contains a separate, provider-neutral image-generation contract and the user's verbatim prompt template at `prompts/image-generation.txt`. A ready `@Slackflow draft` run uploads one Slack reply with the strict-transfer proposal, the full transferred draft as a `.md` file, and one Blog Image. It makes no Webflow request or CMS change. This one command incurs one image-generation request only when the proposal is `ready`; `needs_input` and `conflict` proposals do not generate an image. The prompt remains unchanged at 1920×1080. GPT Image 2 generates its documented 1536×1024 landscape source, then Slackflow places it without cropping onto a pure-black **1920×1080** canvas, which is the delivered Slack/Webflow asset.
+Only exact compact commands are accepted. For example, `@slackflow create a Webflow draft` does not trigger any action.
 
-Every draft command is claimed in a small durable SQLite ledger before any external call. A delayed/repeated Slack delivery or process restart cannot create a second draft or image for the same command. The state file holds only IDs, timestamps, and status; configure `SLACKFLOW_STATE_PATH` on persistent storage when hosting.
+## What works today
 
-For host-specific deployment constraints—especially why Hugging Face's default disk cannot retain this SQLite file—read [DEPLOYMENT.md](DEPLOYMENT.md).
+- Reads the root message and replies posted before the command from every participant.
+- Removes the command and Slackflow's own messages from the source.
+- Transfers article text only from exact Slack source text. It does not invent, rewrite, or improve the article.
+- Posts a review proposal, a Markdown draft file, and one 1920x1080 Blog Image in Slack.
+- Uses `gpt-5.6-luna` through a small provider adapter and `gpt-image-2` for the image preview.
+- Does not create, edit, publish, or otherwise change anything in Webflow.
 
-The transcript collector includes Slack messages from every participant, paginates long threads, removes Slackflow's own replies by both bot user ID and bot ID, removes the compact invocation command, excludes messages posted after invocation, and deduplicates paginated results by timestamp. It logs fetched, removed, and final source counts. Version 1 captures message text only; Slack files, images, previews, and external links are deliberately out of scope until their data policy is implemented.
+If the thread does not contain enough exact source text, Slackflow returns `needs_input` instead of making content up.
+
+## What is not connected yet
+
+Webflow MCP OAuth, CMS schema reading, and Webflow draft creation have not been implemented yet. The configured future MCP endpoint is:
+
+```text
+https://mcp.webflow.com/mcp
+```
+
+The planned flow is simple:
+
+```text
+@slackflow connect
+  -> Complete Webflow OAuth in the browser
+  -> Slackflow reads the chosen CMS collection schema
+
+@slackflow draft
+  -> Review the exact transferred draft and image in Slack
+  -> Click Create Webflow draft or Cancel
+```
+
+There is no individual approver allowlist for this demo. When this flow is built, anyone in the Slack workspace who can use the bot can start it. The create action will still require an explicit Slack confirmation and will create a draft only. It will never publish automatically.
 
 ## Local setup
 
+Requirements: Node 22.13 or newer and a Slack workspace where you can create an app.
+
 1. Copy `.env.example` to `.env`.
-2. Add the three Slack development credentials to `.env`.
-3. Add the following model settings to `.env` (do not remove your existing `OPENAI_API_KEY`):
+2. Set the Slack credentials and OpenAI API key in `.env`. Never commit or share that file.
+3. Install and check the project:
 
-   ```text
-   LLM_PROVIDER=openai
-   LLM_MODEL=gpt-5.6-luna
-   LLM_REASONING_EFFORT=medium
+   ```bash
+   npm install
+   npm run check
+   npm test
    ```
 
-   Slackflow's application logic talks to a provider-neutral contract. `openai` is the only implemented adapter in this milestone; another provider is added as a separate, tested native HTTP adapter without changing Slack, validation, or Webflow code.
-   The future image workflow has a separate adapter and configuration:
+4. Start the bot:
+
+   ```bash
+   npm run dev
+   ```
+
+5. In a test channel, create a message with replies, then post `@slackflow draft` as a reply in that thread.
+
+### Required environment values
+
+```text
+SLACK_SIGNING_SECRET=
+SLACK_BOT_TOKEN=
+SLACK_APP_TOKEN=
+OPENAI_API_KEY=
+
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-5.6-luna
+LLM_REASONING_EFFORT=medium
+
+IMAGE_PROVIDER=openai
+IMAGE_MODEL=gpt-image-2
+IMAGE_BLOG_SIZE=1536x1024
+IMAGE_QUALITY=medium
+IMAGE_OUTPUT_FORMAT=jpeg
+```
+
+The image model creates a 1536x1024 source image. Slackflow places it without cropping on a black 1920x1080 canvas before uploading it to Slack.
+
+## Slack app setup
+
+1. Create a Slack app from scratch in your workspace.
+2. Turn on **Socket Mode** and create an app-level token with the `connections:write` scope. Put it in `SLACK_APP_TOKEN`.
+3. Under **OAuth & Permissions**, add these bot token scopes:
 
    ```text
-   IMAGE_PROVIDER=openai
-   IMAGE_MODEL=gpt-image-2
-   IMAGE_BLOG_SIZE=1536x1024
-   IMAGE_QUALITY=medium
-   IMAGE_OUTPUT_FORMAT=jpeg
+   app_mentions:read
+   channels:history
+   groups:history
+   chat:write
+   files:write
    ```
-4. Install packages with `npm install`.
-5. Run `npm run check` and `npm test`.
-6. Start the bot with `npm run dev`.
-7. In `#slackflow-sandbox`, create a thread with two or more replies, then mention `@Slackflow draft` in that thread.
-8. To enable the combined review upload, add the `files:write` bot token scope in the Slack app configuration, reinstall the app, and restart the local bot. Then use `@Slackflow draft` once in a test thread. A ready result posts the proposal and attaches the full `.md` draft plus one Blog Image.
 
-Never commit `.env`.
+4. Under **Event Subscriptions**, subscribe to the `app_mention` bot event.
+5. Install the app to the workspace. Copy the bot token to `SLACK_BOT_TOKEN` and the signing secret to `SLACK_SIGNING_SECRET`.
+6. Invite the bot to each test channel. It must be invited to private channels before it can read their threads.
+
+Socket Mode means Slackflow does not need a public Slack Events URL. It opens an outbound connection to Slack.
+
+## Deploy on Render without Docker
+
+This repository is deployed as a Node web service from the `main` branch of [katipally/slackflow](https://github.com/katipally/slackflow). No Docker setup is required.
+
+1. In Render, create a **Web Service** from the GitHub repository.
+2. Choose the Node runtime and the `main` branch.
+3. Set the build command:
+
+   ```text
+   npm ci && npm run build
+   ```
+
+4. Set the start command:
+
+   ```text
+   npm start
+   ```
+
+5. Add the same secret environment values listed above in Render's Environment page. Do not add `.env` to Git.
+6. Deploy. Render provides `PORT`; Slackflow listens on it and exposes these checks:
+
+   ```text
+   GET /
+   GET /healthz
+   ```
+
+7. Check the Render logs for the Socket Mode connection, then run `@slackflow draft` in the Slack test thread.
+
+The current Render URL is `https://slackflow-demo.onrender.com/`.
+
+### UptimeRobot
+
+Create one HTTP(S) monitor for:
+
+```text
+https://slackflow-demo.onrender.com/healthz
+```
+
+Use UptimeRobot's available five-minute interval. Your monitor is currently up. These requests help avoid Render's 15-minute idle timeout during the demo, but they do not guarantee that a free Render service will never restart.
+
+Render Free has an ephemeral filesystem. The local SQLite run ledger can be lost after a restart, redeploy, or spin-down. That is acceptable for this demo, but any future Webflow OAuth connection may need to be reconnected after one of those events.
+
+## Webflow MCP, when we build it
+
+Slackflow will use Webflow MCP through deterministic application code, not as unrestricted model tools. It will first read the exact CMS collection schema, then map only fields that exist in that schema. It will stop if a required field has no valid value.
+
+The future writer will create a CMS item as a draft only and then verify it. It will not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the full technical contract.
+
+## Helpful links
+
+- [Slack app quickstart](https://docs.slack.dev/quickstart/)
+- [Render web services](https://render.com/docs/web-services)
+- [Render Free limits](https://render.com/docs/free)
+- [UptimeRobot](https://uptimerobot.com/)
+- [Webflow MCP getting started](https://developers.webflow.com/mcp/reference/getting-started)

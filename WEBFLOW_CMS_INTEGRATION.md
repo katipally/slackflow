@@ -31,13 +31,15 @@ Webflow documents access at the MCP **tool** level. `data_cms_tool` contains act
 
 The configured MCP endpoint is `https://mcp.webflow.com/mcp`. A real connection is **not** active in the current local bot, because Webflow requires an account owner to authorize site access through OAuth. This is a deliberate authorization boundary, not a missing value that Slackflow should bypass.
 
+Slackflow now recognizes `@slackflow connect`, `@slackflow schema`, and `@slackflow disconnect`. Until this MCP implementation exists, each command returns its current unavailable state and makes no Webflow request or change.
+
 The production implementation will connect in this order:
 
 1. Deploy Slackflow at a stable HTTPS origin and register/configure its OAuth callback in the MCP client implementation.
 2. An authorized Webflow user completes the browser OAuth consent and selects the allowed site(s).
 3. Store refresh/access credentials encrypted outside the repository; never in Slack, `.env.example`, logs, or model context.
 4. From deterministic code, call only `get_collection_list` and `get_collection_details` to capture the target site, collection, primary locale, field definitions, option IDs, reference IDs, and a schema fingerprint.
-5. Display the generated confirmation form in Slack. On an authorized explicit approval only, call `create_collection_items` for the fixed collection, then read back and verify the resulting item is still a draft.
+5. Display the generated confirmation form in Slack. On an explicit Slack confirmation, call `create_collection_items` for the fixed collection, then read back and verify the resulting item is still a draft.
 
 The image path is deliberately separate: after the approved `gpt-image-2` call returns image bytes, deterministic code uses `data_assets_tool.create_asset`, uploads those bytes to Webflow's returned presigned target, and only then places the returned asset reference into an explicitly approved CMS image field. No model gets a broad Webflow MCP tool, and no generated image becomes a CMS asset automatically.
 
@@ -61,6 +63,10 @@ Webflow's system fields `name` and `slug` are required for CMS items. Any additi
 ## Strict-transfer source rule
 
 Before it reaches this writer, Slackflow's model output contains source selections rather than free-form CMS values. Each non-null selection has an exact text span and the timestamp of the captured Slack message that contains it. Slackflow locally rejects any text that is not a character-for-character source substring, any unknown timestamp, a changed ordering of body spans, or an attempted `compose` response. It then derives the reviewed values deterministically. Therefore the later Webflow writer receives only verified transfer text, never model-authored article prose.
+
+## Demo access policy
+
+This demo has no per-user approver allowlist. Any Slack workspace member who can use Slackflow can connect Webflow and confirm a Webflow draft once those commands are implemented. This is a deliberate demo simplification, not a production security recommendation. Use only a test Webflow site until the access policy is revisited.
 
 ## Draft confirmation form
 
@@ -143,7 +149,7 @@ Webflow's `data_assets_tool` upload is two steps: (1) `create_asset` gets a pres
 
 1. Read the configured collection schema and compare its hash to the approved configuration.
 2. Build the confirmation form and stop on every unmapped required or incompatible field.
-3. Require an authorized Slack user to approve the exact form.
+3. Require an explicit Slack confirmation for the exact form.
 4. Call the fixed create-draft action for the configured collection only.
 5. Read the created item back and verify it is a draft, not archived, and has no publication timestamp.
 6. Reply with the CMS item ID/link and an audit record.

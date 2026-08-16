@@ -8,7 +8,7 @@ import { createImageGenerationProvider } from "./images/create-provider.js";
 import { createDraftModelProvider } from "./llm/create-provider.js";
 import { formatProposalPreview } from "./proposal-preview.js";
 import { SlackflowRunStore } from "./run-store.js";
-import { parseSlackflowCommand } from "./slack-command.js";
+import { parseSlackflowCommand, type SlackflowCommand } from "./slack-command.js";
 import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
 
@@ -34,6 +34,37 @@ const healthServer = createServer((request, response) => {
 });
 
 let cachedBotIdentity: { botId?: string; userId: string } | undefined;
+
+function commandReply(command: Exclude<SlackflowCommand, "draft" | null>): string {
+  switch (command) {
+    case "help":
+      return [
+        "*Slackflow commands*",
+        "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, and one Blog Image in this thread.",
+        "• `@slackflow status` shows the current Slackflow and Webflow state.",
+        "• `@slackflow connect` starts Webflow OAuth after the MCP connection is implemented.",
+        "• `@slackflow schema` reads the configured Webflow CMS schema after it is implemented.",
+        "• `@slackflow disconnect` removes the stored Webflow connection after it is implemented.",
+        "Only `draft`, `help`, and `status` have useful behavior today. Webflow writes are disabled."
+      ].join("\n");
+    case "status":
+      return [
+        "*Slackflow status*",
+        "• Slack Socket Mode: connected",
+        "• Draft generation: available",
+        "• Image preview: available for ready drafts",
+        "• Webflow MCP OAuth: not implemented",
+        "• Webflow CMS schema: not read",
+        "• Webflow writes and publishing: disabled"
+      ].join("\n");
+    case "connect":
+      return ":information_source: Webflow OAuth is not implemented yet, so Slackflow cannot connect to Webflow or store a token. No connection was created.";
+    case "schema":
+      return ":information_source: Webflow MCP is not connected yet, so Slackflow cannot read a CMS schema. No Webflow request was made.";
+    case "disconnect":
+      return ":information_source: Slackflow has no Webflow connection to remove yet. No token or Webflow setting was changed.";
+  }
+}
 
 async function getSlackflowBotIdentity(client: WebClient): Promise<{ botId?: string; userId: string }> {
   if (cachedBotIdentity) {
@@ -64,7 +95,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
   if (command !== "draft") {
     await client.chat.postMessage({
       channel: event.channel,
-      text: "Use `@Slackflow draft` to prepare a strict-transfer proposal and one Slack-only Blog Image preview. Slackflow will not create or change anything in Webflow.",
+      text: command ? commandReply(command) : "Use `@slackflow help` to see the available commands. `@slackflow draft` prepares a strict-transfer proposal and one Slack-only Blog Image preview. Slackflow will not create or change anything in Webflow.",
       thread_ts: rootTs
     });
     runStore.mark(body.event_id, "completed");
