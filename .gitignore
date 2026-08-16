@@ -1,0 +1,16 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.slackflow/
+
+# Logs and editor/system files
+*.log
+.DS_Store
+.idea/
+.vscode/

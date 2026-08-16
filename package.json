@@ -1,0 +1,28 @@
+{
+  "name": "slackflow",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A Slack agent that turns invoked thread context into reviewed Webflow drafts.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "check": "tsc --noEmit",
+    "test": "tsx --test src/*.test.ts src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@slack/bolt": "^5.0.0",
+    "@slack/web-api": "^8.0.0",
+    "dotenv": "^17.4.2",
+    "sharp": "^0.35.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  }
+}
