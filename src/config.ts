@@ -66,5 +66,10 @@ export const config = {
     quality: configuredImageQuality(),
     blogImageSize: process.env.IMAGE_BLOG_SIZE?.trim() || "1536x1024",
     openaiApiKey: optionalEnvironmentValue("OPENAI_API_KEY")
+  },
+  webflow: {
+    mcpUrl: process.env.WEBFLOW_MCP_URL?.trim() || "https://mcp.webflow.com/mcp",
+    publicBaseUrl: optionalEnvironmentValue("PUBLIC_BASE_URL"),
+    tokenEncryptionKey: optionalEnvironmentValue("WEBFLOW_TOKEN_ENCRYPTION_KEY")
   }
 } as const;

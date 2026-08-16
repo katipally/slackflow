@@ -11,6 +11,7 @@ import { SlackflowRunStore } from "./run-store.js";
 import { parseSlackflowCommand, type SlackflowCommand } from "./slack-command.js";
 import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
+import { WebflowMcpConnection } from "./webflow-mcp.js";
 
 const app = new App({
   appToken: config.slack.appToken,
@@ -22,48 +23,135 @@ const app = new App({
 const draftModelProvider = createDraftModelProvider(config.llm);
 const imageGenerationProvider = createImageGenerationProvider(config.image);
 const runStore = new SlackflowRunStore(config.statePath);
+const webflowConnection = new WebflowMcpConnection({
+  mcpUrl: config.webflow.mcpUrl,
+  publicBaseUrl: config.webflow.publicBaseUrl ?? "",
+  statePath: config.statePath,
+  tokenEncryptionKey: config.webflow.tokenEncryptionKey ?? ""
+});
 const healthServer = createServer((request, response) => {
-  if (request.method === "GET" && (request.url === "/" || request.url === "/healthz")) {
-    response.writeHead(200, { "Content-Type": "application/json" });
-    response.end('{"status":"ok"}\n');
-    return;
-  }
-
-  response.writeHead(404, { "Content-Type": "application/json" });
-  response.end('{"error":"not_found"}\n');
+  void handleHttpRequest(request, response);
 });
 
 let cachedBotIdentity: { botId?: string; userId: string } | undefined;
 
-function commandReply(command: Exclude<SlackflowCommand, "draft" | null>): string {
+function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect" | "draft" | "status" | null>): string {
   switch (command) {
     case "help":
       return [
         "*Slackflow commands*",
         "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, and one Blog Image in this thread.",
         "• `@slackflow status` shows the current Slackflow and Webflow state.",
-        "• `@slackflow connect` starts Webflow OAuth after the MCP connection is implemented.",
-        "• `@slackflow schema` reads the configured Webflow CMS schema after it is implemented.",
-        "• `@slackflow disconnect` removes the stored Webflow connection after it is implemented.",
-        "Only `draft`, `help`, and `status` have useful behavior today. Webflow writes are disabled."
+        "• `@slackflow connect` sends a private one-time Webflow OAuth link.",
+        "• `@slackflow schema` is reserved for read-only CMS schema discovery.",
+        "• `@slackflow disconnect` removes Slackflow's encrypted local Webflow connection.",
+        "Webflow writes are disabled."
       ].join("\n");
-    case "status":
-      return [
-        "*Slackflow status*",
-        "• Slack Socket Mode: connected",
-        "• Draft generation: available",
-        "• Image preview: available for ready drafts",
-        "• Webflow MCP OAuth: not implemented",
-        "• Webflow CMS schema: not read",
-        "• Webflow writes and publishing: disabled"
-      ].join("\n");
-    case "connect":
-      return ":information_source: Webflow OAuth is not implemented yet, so Slackflow cannot connect to Webflow or store a token. No connection was created.";
     case "schema":
-      return ":information_source: Webflow MCP is not connected yet, so Slackflow cannot read a CMS schema. No Webflow request was made.";
-    case "disconnect":
-      return ":information_source: Slackflow has no Webflow connection to remove yet. No token or Webflow setting was changed.";
+      return ":information_source: CMS schema discovery is not implemented yet. Webflow writes remain disabled.";
   }
+}
+
+function webflowStatusReply(): string {
+  const status = webflowConnection.status();
+  const lines = [
+    "*Slackflow status*",
+    "• Slack Socket Mode: connected",
+    "• Draft generation: available",
+    "• Image preview: available for ready drafts"
+  ];
+
+  if (status.state === "configuration_missing") {
+    lines.push(`• Webflow MCP: configuration missing (${status.message})`);
+  } else if (status.state === "not_connected") {
+    lines.push("• Webflow MCP OAuth: not connected");
+  } else {
+    lines.push(`• Webflow MCP OAuth: connected locally at ${new Date(status.connectedAt).toISOString()}`);
+    if (status.serverName) lines.push(`• Webflow MCP server: ${status.serverName}${status.serverVersion ? ` ${status.serverVersion}` : ""}`);
+  }
+
+  lines.push("• Webflow CMS schema: not read");
+  lines.push("• Webflow writes and publishing: disabled");
+  return lines.join("\n");
+}
+
+async function handleConnectCommand(client: WebClient, channel: string, user: string): Promise<void> {
+  const result = webflowConnection.createConnectionLink();
+
+  if ("error" in result) {
+    await client.chat.postEphemeral({
+      channel,
+      text: `Webflow MCP cannot start: ${result.error}`,
+      user
+    });
+    return;
+  }
+
+  await client.chat.postEphemeral({
+    blocks: [
+      {
+        text: { emoji: true, text: "Connect Slackflow to Webflow", type: "plain_text" },
+        type: "header"
+      },
+      {
+        text: {
+          text: "This one-time link expires in 10 minutes. Complete Webflow OAuth in your browser. Slackflow will store the resulting token encrypted in its local SQLite state. It will not read a CMS schema or make any Webflow change yet.",
+          type: "mrkdwn"
+        },
+        type: "section"
+      },
+      {
+        elements: [{ text: { emoji: true, text: "Connect Webflow", type: "plain_text" }, type: "button", url: result.link }],
+        type: "actions"
+      }
+    ],
+    channel,
+    text: `Open this one-time Webflow connection link: ${result.link}`,
+    user
+  });
+}
+
+async function handleHttpRequest(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse): Promise<void> {
+  const requestUrl = new URL(request.url ?? "/", "http://localhost");
+
+  if (request.method === "GET" && (requestUrl.pathname === "/" || requestUrl.pathname === "/healthz")) {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.end('{"status":"ok"}\n');
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/webflow/connect") {
+    try {
+      const requestId = requestUrl.searchParams.get("request");
+      if (!requestId) throw new Error("Missing Webflow connection request.");
+      const authorizationUrl = await webflowConnection.startAuthorization(requestId);
+      response.writeHead(302, { Location: authorizationUrl });
+      response.end();
+    } catch (error) {
+      app.logger.error("Failed to start Webflow OAuth");
+      response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+      response.end("<h1>Webflow connection could not start</h1><p>Return to Slack and run @slackflow connect again.</p>");
+    }
+    return;
+  }
+
+  if (request.method === "GET" && requestUrl.pathname === "/webflow/oauth/callback") {
+    try {
+      const requestId = requestUrl.searchParams.get("request");
+      if (!requestId) throw new Error("Missing Webflow connection request.");
+      await webflowConnection.completeAuthorization(requestId, requestUrl.searchParams);
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end("<h1>Webflow connected</h1><p>You can return to Slack and run @slackflow status.</p>");
+    } catch (error) {
+      app.logger.error("Failed to complete Webflow OAuth");
+      response.writeHead(400, { "Content-Type": "text/html; charset=utf-8" });
+      response.end("<h1>Webflow connection could not finish</h1><p>Return to Slack and run @slackflow connect again.</p>");
+    }
+    return;
+  }
+
+  response.writeHead(404, { "Content-Type": "application/json" });
+  response.end('{"error":"not_found"}\n');
 }
 
 async function getSlackflowBotIdentity(client: WebClient): Promise<{ botId?: string; userId: string }> {
@@ -91,6 +179,40 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
   }
 
   const command = parseSlackflowCommand(event.text);
+
+  if (command === "connect") {
+    try {
+      if (!event.user) {
+        throw new Error("Slack did not provide the user who requested Webflow OAuth.");
+      }
+      await handleConnectCommand(client, event.channel, event.user);
+    } catch (error) {
+      logger.error(error, "Failed to send Webflow OAuth link");
+      await client.chat.postMessage({
+        channel: event.channel,
+        text: ":warning: Slackflow could not send the private Webflow connection link. No Webflow connection was created.",
+        thread_ts: rootTs
+      });
+    }
+    runStore.mark(body.event_id, "completed");
+    return;
+  }
+
+  if (command === "status") {
+    await client.chat.postMessage({ channel: event.channel, text: webflowStatusReply(), thread_ts: rootTs });
+    runStore.mark(body.event_id, "completed");
+    return;
+  }
+
+  if (command === "disconnect") {
+    const status = webflowConnection.disconnect();
+    const text = status.state === "configuration_missing"
+      ? `:information_source: Webflow MCP is not configured: ${status.message}`
+      : ":white_check_mark: Slackflow removed its encrypted local Webflow connection. This does not revoke the Webflow account's OAuth grant.";
+    await client.chat.postMessage({ channel: event.channel, text, thread_ts: rootTs });
+    runStore.mark(body.event_id, "completed");
+    return;
+  }
 
   if (command !== "draft") {
     await client.chat.postMessage({

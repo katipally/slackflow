@@ -12,5 +12,6 @@ For this demo:
 - Monitor `https://slackflow-demo.onrender.com/healthz` with UptimeRobot every five minutes.
 - Keep all credentials in Render Environment settings and out of Git.
 - Expect local SQLite state to be lost if the free service restarts, redeploys, or spins down.
+- Set `PUBLIC_BASE_URL=https://slackflow-demo.onrender.com` and a secret `WEBFLOW_TOKEN_ENCRYPTION_KEY` before using `@slackflow connect`.
 
 The bot uses Socket Mode. It needs no public Slack Events URL.

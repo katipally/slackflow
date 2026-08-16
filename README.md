@@ -15,9 +15,9 @@ Use it inside a Slack thread:
 | `@slackflow draft` | Yes | Creates the strict-transfer Slack review, Markdown file, and image preview. It does not write to Webflow. |
 | `@slackflow help` | Yes | Shows this command set in Slack. |
 | `@slackflow status` | Yes | Shows the current Slackflow and Webflow connection state without exposing secrets. |
-| `@slackflow connect` | Recognized | Explains that Webflow OAuth is not implemented yet. It does not create a connection. |
+| `@slackflow connect` | Yes, after Render configuration | Sends a private one-time Webflow OAuth link. |
 | `@slackflow schema` | Recognized | Explains that schema discovery is unavailable until Webflow MCP is connected. |
-| `@slackflow disconnect` | Recognized | Explains that there is no stored Webflow connection yet. |
+| `@slackflow disconnect` | Yes | Removes Slackflow's encrypted local Webflow connection. It does not revoke the OAuth grant in Webflow. |
 
 Only exact compact commands are accepted. For example, `@slackflow create a Webflow draft` does not trigger any action.
 
@@ -32,9 +32,9 @@ Only exact compact commands are accepted. For example, `@slackflow create a Webf
 
 If the thread does not contain enough exact source text, Slackflow returns `needs_input` instead of making content up.
 
-## What is not connected yet
+## Webflow MCP status
 
-Webflow MCP OAuth, CMS schema reading, and Webflow draft creation have not been implemented yet. The configured future MCP endpoint is:
+Slackflow now contains the OAuth connection flow for Webflow MCP. It has not yet been tested against your Webflow account, and CMS schema reading and Webflow draft creation are still disabled. The MCP endpoint is:
 
 ```text
 https://mcp.webflow.com/mcp
@@ -44,12 +44,13 @@ The planned flow is simple:
 
 ```text
 @slackflow connect
+  -> Receive a private one-time link in Slack
   -> Complete Webflow OAuth in the browser
-  -> Slackflow reads the chosen CMS collection schema
+  -> Run @slackflow status to confirm the local connection
 
 @slackflow draft
   -> Review the exact transferred draft and image in Slack
-  -> Click Create Webflow draft or Cancel
+  -> No Webflow CMS action yet
 ```
 
 There is no individual approver allowlist for this demo. When this flow is built, anyone in the Slack workspace who can use the bot can start it. The create action will still require an explicit Slack confirmation and will create a draft only. It will never publish automatically.
@@ -93,6 +94,10 @@ IMAGE_MODEL=gpt-image-2
 IMAGE_BLOG_SIZE=1536x1024
 IMAGE_QUALITY=medium
 IMAGE_OUTPUT_FORMAT=jpeg
+
+PUBLIC_BASE_URL=https://slackflow-demo.onrender.com
+WEBFLOW_MCP_URL=https://mcp.webflow.com/mcp
+WEBFLOW_TOKEN_ENCRYPTION_KEY=
 ```
 
 The image model creates a 1536x1024 source image. Slackflow places it without cropping on a black 1920x1080 canvas before uploading it to Slack.
@@ -135,7 +140,7 @@ This repository is deployed as a Node web service from the `main` branch of [kat
    npm start
    ```
 
-5. Add the same secret environment values listed above in Render's Environment page. Do not add `.env` to Git.
+5. Add the same secret environment values listed above in Render's Environment page. Set `PUBLIC_BASE_URL` to `https://slackflow-demo.onrender.com`. Generate `WEBFLOW_TOKEN_ENCRYPTION_KEY` with `openssl rand -base64 32` and store its output only in Render. Do not add `.env` or this key to Git.
 6. Deploy. Render provides `PORT`; Slackflow listens on it and exposes these checks:
 
    ```text
@@ -159,9 +164,11 @@ Use UptimeRobot's available five-minute interval. Your monitor is currently up. 
 
 Render Free has an ephemeral filesystem. The local SQLite run ledger can be lost after a restart, redeploy, or spin-down. That is acceptable for this demo, but any future Webflow OAuth connection may need to be reconnected after one of those events.
 
-## Webflow MCP, when we build it
+## Webflow MCP boundaries
 
-Slackflow will use Webflow MCP through deterministic application code, not as unrestricted model tools. It will first read the exact CMS collection schema, then map only fields that exist in that schema. It will stop if a required field has no valid value.
+Slackflow uses the MCP TypeScript client and Webflow's OAuth server. The local SQLite store encrypts OAuth tokens, dynamic client information, PKCE data, and OAuth discovery state using `WEBFLOW_TOKEN_ENCRYPTION_KEY`. The one-time browser link expires after ten minutes.
+
+Slackflow will use Webflow MCP through deterministic application code, not as unrestricted model tools. The current code establishes OAuth only. A later schema feature will read the exact CMS collection schema and map only fields that exist in that schema. It will stop if a required field has no valid value.
 
 The future writer will create a CMS item as a draft only and then verify it. It will not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the full technical contract.
 

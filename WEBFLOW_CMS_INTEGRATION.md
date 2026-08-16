@@ -1,6 +1,6 @@
 # Webflow CMS Draft Integration Contract
 
-**Status:** schema discovery required before implementation. No Webflow credentials, MCP connection, CMS schema, or write capability has been added to Slackflow.
+**Status:** Webflow OAuth connection code is implemented but has not yet been verified against this Webflow account. No CMS schema has been read and no Webflow write capability has been added to Slackflow.
 
 **Verified on:** 2026-08-15
 
@@ -29,9 +29,9 @@ Webflow documents access at the MCP **tool** level. `data_cms_tool` contains act
 
 ## Remote MCP connection gate
 
-The configured MCP endpoint is `https://mcp.webflow.com/mcp`. A real connection is **not** active in the current local bot, because Webflow requires an account owner to authorize site access through OAuth. This is a deliberate authorization boundary, not a missing value that Slackflow should bypass.
+The configured MCP endpoint is `https://mcp.webflow.com/mcp`. Slackflow's `@slackflow connect` command creates a private, short-lived connection link. The web route starts the MCP OAuth flow, validates the returned state, lets the MCP SDK validate the issuer and exchange the code, and stores the resulting credentials encrypted in the local SQLite state file. No credential is sent to Slack, the model, or logs.
 
-Slackflow now recognizes `@slackflow connect`, `@slackflow schema`, and `@slackflow disconnect`. Until this MCP implementation exists, each command returns its current unavailable state and makes no Webflow request or change.
+Slackflow now recognizes `@slackflow connect`, `@slackflow status`, `@slackflow schema`, and `@slackflow disconnect`. `connect`, `status`, and local `disconnect` are implemented. `schema` remains unavailable until the OAuth connection is verified. It makes no Webflow request or change.
 
 The production implementation will connect in this order:
 
