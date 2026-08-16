@@ -43,13 +43,13 @@ function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect
         "*Slackflow commands*",
         "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, and one Blog Image in this thread.",
         "• `@slackflow status` shows the current Slackflow and Webflow state.",
-        "• `@slackflow connect` sends a private one-time Webflow OAuth link.",
+        "• `@slackflow connect` posts a one-time Webflow OAuth link in this thread.",
         "• `@slackflow schema` reads a selected Webflow CMS schema only.",
         "• `@slackflow disconnect` removes Slackflow's encrypted local Webflow connection.",
-        "Webflow writes are disabled."
+        "Webflow draft creation stays off until Slackflow validates the selected CMS schema."
       ].join("\n");
     case "schema":
-      return ":information_source: CMS schema discovery is not implemented yet. Webflow writes remain disabled.";
+      return ":information_source: Run `@slackflow schema` to choose a website and read its CMS fields. This step is read-only.";
   }
 }
 
@@ -161,48 +161,76 @@ function actionValue(action: unknown): string | undefined {
 
 function safeWebflowReadError(error: unknown): string {
   const message = error instanceof Error ? error.message : "Unknown Webflow MCP error.";
-  return message
+  const safeMessage = message
     .replace(/(access[_-]?token|refresh[_-]?token|authorization|bearer)\s*[:=]\s*[^\s,]+/gi, "$1=[redacted]")
     .replace(/https?:\/\/\S+/g, "[URL redacted]")
     .slice(0, 350);
+
+  if (/path.*actions|expected.*array|received.*undefined/i.test(safeMessage)) {
+    return "Webflow MCP rejected the site-discovery request. Deploy the current Slackflow update, then retry the command.";
+  }
+
+  return safeMessage;
 }
 
-async function handleConnectCommand(client: WebClient, channel: string, threadTs: string, user: string): Promise<void> {
+function webflowConnectBlocks(link: string) {
+  return [
+    {
+      text: { emoji: true, text: "Connect Slackflow to Webflow", type: "plain_text" as const },
+      type: "header" as const
+    },
+    {
+      text: {
+        text: "This one-time link expires in 10 minutes. Complete Webflow OAuth in your browser. Slackflow stores the resulting token encrypted in its local SQLite state. It will not read a CMS schema or make any Webflow change yet.",
+        type: "mrkdwn" as const
+      },
+      type: "section" as const
+    },
+    {
+      elements: [{ text: { emoji: true, text: "Connect Webflow", type: "plain_text" as const }, type: "button" as const, url: link }],
+      type: "actions" as const
+    }
+  ];
+}
+
+function webflowConnectedBlocks() {
+  return [
+    {
+      text: { emoji: true, text: "Webflow connected", type: "plain_text" as const },
+      type: "header" as const
+    },
+    {
+      text: {
+        text: ":white_check_mark: Slackflow saved the encrypted OAuth connection. Run `@slackflow schema` in this thread to choose the target website and CMS collection. This next step is read-only.",
+        type: "mrkdwn" as const
+      },
+      type: "section" as const
+    }
+  ];
+}
+
+async function handleConnectCommand(client: WebClient, channel: string, threadTs: string): Promise<void> {
   const result = webflowConnection.createConnectionLink({ channel, threadTs });
 
   if ("error" in result) {
-    await client.chat.postEphemeral({
+    await client.chat.postMessage({
       channel,
       text: `Webflow MCP cannot start: ${result.error}`,
-      thread_ts: threadTs,
-      user
+      thread_ts: threadTs
     });
     return;
   }
 
-  await client.chat.postEphemeral({
-    blocks: [
-      {
-        text: { emoji: true, text: "Connect Slackflow to Webflow", type: "plain_text" },
-        type: "header"
-      },
-      {
-        text: {
-          text: "This one-time link expires in 10 minutes. Complete Webflow OAuth in your browser. Slackflow will store the resulting token encrypted in its local SQLite state. It will not read a CMS schema or make any Webflow change yet.",
-          type: "mrkdwn"
-        },
-        type: "section"
-      },
-      {
-        elements: [{ text: { emoji: true, text: "Connect Webflow", type: "plain_text" }, type: "button", url: result.link }],
-        type: "actions"
-      }
-    ],
+  const connectionCard = await client.chat.postMessage({
+    blocks: webflowConnectBlocks(result.link),
     channel,
-    text: `Open this one-time Webflow connection link: ${result.link}`,
-    thread_ts: threadTs,
-    user
+    text: "Connect Slackflow to Webflow with a one-time OAuth link.",
+    thread_ts: threadTs
   });
+
+  if (connectionCard.ts) {
+    webflowConnection.recordConnectionMessage(result.requestId, connectionCard.ts);
+  }
 }
 
 async function handleHttpRequest(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse): Promise<void> {
@@ -236,11 +264,20 @@ async function handleHttpRequest(request: import("node:http").IncomingMessage, r
       const slackContext = await webflowConnection.completeAuthorization(requestId, requestUrl.searchParams);
       if (slackContext) {
         try {
-          await app.client.chat.postMessage({
-            channel: slackContext.channel,
-            thread_ts: slackContext.threadTs,
-            text: ":white_check_mark: *Webflow connected*\nSlackflow stored the encrypted OAuth connection. Next, run `@slackflow schema` in this thread to choose the target website and CMS collection."
-          });
+          if (slackContext.messageTs) {
+            await app.client.chat.update({
+              blocks: webflowConnectedBlocks(),
+              channel: slackContext.channel,
+              text: "Webflow connected. Run @slackflow schema in this thread to choose the target website and CMS collection.",
+              ts: slackContext.messageTs
+            });
+          } else {
+            await app.client.chat.postMessage({
+              channel: slackContext.channel,
+              thread_ts: slackContext.threadTs,
+              text: ":white_check_mark: *Webflow connected*\nRun `@slackflow schema` in this thread to choose the target website and CMS collection."
+            });
+          }
         } catch {
           app.logger.error("Webflow OAuth completed but Slackflow could not post the thread confirmation");
         }
@@ -295,10 +332,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
 
   if (command === "connect") {
     try {
-      if (!event.user) {
-        throw new Error("Slack did not provide the user who requested Webflow OAuth.");
-      }
-      await handleConnectCommand(client, event.channel, rootTs, event.user);
+      await handleConnectCommand(client, event.channel, rootTs);
     } catch (error) {
       logger.error(error, "Failed to send Webflow OAuth link");
       await client.chat.postMessage({

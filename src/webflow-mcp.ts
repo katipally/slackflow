@@ -20,12 +20,13 @@ const PENDING_TTL_MS = 10 * 60 * 1000;
 
 type PendingMetadata = {
   expiresAt: number;
-  slackContext?: { channel: string; threadTs: string };
+  slackContext?: WebflowConnectionContext;
 };
 
 export type WebflowConnectionContext = {
   channel: string;
   threadTs: string;
+  messageTs?: string;
 };
 
 type ConnectionMetadata = {
@@ -180,7 +181,7 @@ export class WebflowMcpConnection {
     this.store = this.configurationError ? undefined : new WebflowConnectionStore(config.statePath, config.tokenEncryptionKey);
   }
 
-  createConnectionLink(slackContext?: WebflowConnectionContext): { link: string } | { error: string } {
+  createConnectionLink(slackContext?: WebflowConnectionContext): { link: string; requestId: string } | { error: string } {
     if (!this.store || this.configurationError) {
       return { error: this.configurationError ?? "Webflow MCP is not configured." };
     }
@@ -190,7 +191,18 @@ export class WebflowMcpConnection {
 
     const link = new URL("/webflow/connect", this.config.publicBaseUrl);
     link.searchParams.set("request", requestId);
-    return { link: link.toString() };
+    return { link: link.toString(), requestId };
+  }
+
+  recordConnectionMessage(requestId: string, messageTs: string): void {
+    const store = this.requireStore();
+    const metadata = this.requirePendingRequest(requestId);
+
+    if (!metadata.slackContext) return;
+    store.set(this.pendingSession(requestId), "metadata", {
+      ...metadata,
+      slackContext: { ...metadata.slackContext, messageTs }
+    } satisfies PendingMetadata);
   }
 
   async startAuthorization(requestId: string): Promise<string> {
@@ -300,15 +312,15 @@ export class WebflowMcpConnection {
 
   /** These reads are intentionally the only CMS operations enabled at this stage. */
   async listSites(): Promise<WebflowToolData> {
-    return this.callTool("data_sites_tool", { action: "list_sites" });
+    return this.callTool("data_sites_tool", { actions: [{ action: "list_sites" }] });
   }
 
   async listCollections(siteId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { action: "get_collection_list", siteId });
+    return this.callTool("data_cms_tool", { actions: [{ action: "get_collection_list", siteId }] });
   }
 
   async getCollectionDetails(collectionId: string): Promise<WebflowToolData> {
-    return this.callTool("data_cms_tool", { action: "get_collection_details", collection_id: collectionId });
+    return this.callTool("data_cms_tool", { actions: [{ action: "get_collection_details", collection_id: collectionId }] });
   }
 
   saveSchema(siteId: string, collectionId: string, schema: unknown): void {

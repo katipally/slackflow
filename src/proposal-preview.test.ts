@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { formatProposalPreview } from "./proposal-preview.js";
 
-test("shows exact transfer-source timestamps and escapes Slack markup", () => {
+test("shows a compact field checklist and escapes Slack markup", () => {
   const preview = formatProposalPreview(
     {
       mode: "transfer",
@@ -38,14 +38,12 @@ test("shows exact transfer-source timestamps and escapes Slack markup", () => {
     3
   );
 
-  assert.match(preview, /Thread context at invocation: 3 source messages/);
-  assert.match(preview, /Exact transfer sources \(field ← Slack message timestamp\)/);
-  assert.match(preview, /Title source ← 1710000001.000000/);
-  assert.match(preview, /Body source 1 ← 1710000001.000000/);
-  assert.match(preview, /Exact body source segments: 1/);
+  assert.match(preview, /3 source messages read/);
+  assert.match(preview, /Fields with values/);
+  assert.match(preview, /Slug: a-safe-title/);
   assert.match(preview, /Tag: AI Industry/);
-  assert.match(preview, /Full post body: attached strict-transfer Markdown file/);
-  assert.match(preview, /Tag rationale: The source concerns the AI industry. ← 1710000001.000000/);
-  assert.match(preview, /&lt;@U123&gt; &amp; details/);
-  assert.match(preview, /approval card will show every actual CMS field/);
+  assert.match(preview, /Post Body: attached Markdown file/);
+  assert.match(preview, /Left blank or collection default/);
+  assert.doesNotMatch(preview, /A body/);
+  assert.match(preview, /real fields are validated/);
 });

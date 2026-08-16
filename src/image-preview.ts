@@ -48,7 +48,35 @@ function renderDraftMarkdown(proposal: DraftProposal): string {
     throw new Error("Cannot create a Markdown file without a reviewed title and body.");
   }
 
-  return `# ${proposal.fields.title}\n\n${proposal.fields.body_markdown}\n`;
+  const slug = filenameStem(proposal.fields.title);
+  const value = (field: string | null, missing = "Leave blank. Not provided in the Slack thread.") => field?.trim() || missing;
+
+  return [
+    "# Slackflow Webflow draft",
+    "",
+    "## Field values",
+    "",
+    `- **Name:** ${proposal.fields.title}`,
+    `- **Slug:** ${slug}`,
+    `- **Publication Date:** ${value(proposal.fields.publication_date)}`,
+    `- **Source URL:** ${value(proposal.fields.source_url)}`,
+    `- **Tag:** ${value(proposal.fields.tag)}`,
+    "- **Post Summary:** Leave blank. Slackflow does not write a summary that was not supplied.",
+    "- **Main Image:** Attached Blog Image (1920x1080 review asset).",
+    "- **Thumbnail Image:** Leave blank until its exact CMS requirement is mapped.",
+    "- **Featured?:** Leave at the collection default.",
+    "- **Color:** Leave blank.",
+    "- **Writer:** Leave blank unless the selected CMS mapping has a verified default.",
+    "- **Writer Profile Image:** Leave blank unless the selected CMS mapping has a verified default.",
+    "- **Category:** Leave blank unless it is explicitly supplied or the selected CMS mapping has a verified rule.",
+    "- **Slide Show Popup:** Leave blank.",
+    "- **Created On (Inputted):** Leave blank.",
+    "",
+    "## Post Body",
+    "",
+    proposal.fields.body_markdown,
+    ""
+  ].join("\n");
 }
 
 /**

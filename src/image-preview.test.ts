@@ -59,7 +59,9 @@ test("generates a full transferred Markdown file and one 1920x1080 image using t
   assert.match(calls[0]?.prompt ?? "", /Title: Open models shift adoption/);
   assert.equal(preview.fileUploads.length, 2);
   assert.equal(preview.fileUploads[0]?.filename, "open-models-shift-adoption-draft.md");
-  assert.equal(preview.fileUploads[0]?.file.toString("utf8"), "# Open models shift adoption\n\nA reviewed article body.\n");
+  assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /## Field values/);
+  assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /\*\*Slug:\*\* open-models-shift-adoption/);
+  assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /## Post Body\n\nA reviewed article body\./);
   assert.equal(preview.fileUploads[1]?.filename, "open-models-shift-adoption-blog-image.jpg");
   const uploadedImage = preview.fileUploads[1]?.file;
   assert.ok(uploadedImage);

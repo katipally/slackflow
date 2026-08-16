@@ -1,6 +1,4 @@
-import type { DraftProposal, TransferSourceSegment } from "./llm/contracts.js";
-
-const MAX_VISIBLE_BODY_SOURCES = 10;
+import type { DraftProposal } from "./llm/contracts.js";
 
 function escapeSlackText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -10,61 +8,30 @@ function displayValue(value: string | null, fallback = "Not provided"): string {
   return value && value.trim() ? value.trim() : fallback;
 }
 
-function truncate(value: string, limit: number): string {
-  return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
-}
-
-function previewValue(value: string | null, limit: number, fallback?: string): string {
-  return escapeSlackText(truncate(displayValue(value, fallback), limit));
-}
-
-function sourceLine(label: string, source: TransferSourceSegment | null): string | null {
-  return source ? `• ${label} ← ${source.message_timestamp}` : null;
+function slugFromTitle(title: string | null): string {
+  return (title ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "Not available";
 }
 
 /** Formats a reviewable proposal only. It never creates or updates a CMS item. */
 export function formatProposalPreview(proposal: DraftProposal, messageCount: number): string {
   const lines = [
     ":mag: *Slackflow draft proposal — no Webflow changes made*",
-    `• Thread context at invocation: ${messageCount} source messages`,
-    `• Mode: ${proposal.mode}`,
-    `• Status: *${proposal.status}*`,
-    "*Draft values for approval*",
-    `• Name / title: ${previewValue(proposal.fields.title, 180)}`,
-    `• Post body: ${previewValue(proposal.fields.body_markdown, 600)}`,
-    "• Full post body: attached strict-transfer Markdown file",
-    `• Publication date: ${previewValue(proposal.fields.publication_date, 80)}`,
-    `• Source URL: ${previewValue(proposal.fields.source_url, 240)}`,
-    `• Tag: ${previewValue(proposal.fields.tag, 80, "Needs classification")}`,
-    "• Blog image: attached 1920×1080 image",
-    `• Thumbnail brief: ${previewValue(proposal.fields.thumbnail_brief, 220)}`,
-    `• Banner brief: ${previewValue(proposal.fields.banner_brief, 220)}`,
-    `• Exact body source segments: ${proposal.source_selections.body_markdown.length}`
+    `• ${messageCount} source messages read`,
+    "*Fields with values*",
+    `• Name: ${escapeSlackText(displayValue(proposal.fields.title))}`,
+    `• Slug: ${escapeSlackText(slugFromTitle(proposal.fields.title))}`,
+    "• Post Body: attached Markdown file",
+    `• Publication Date: ${escapeSlackText(displayValue(proposal.fields.publication_date))}`,
+    `• Source URL: ${escapeSlackText(displayValue(proposal.fields.source_url))}`,
+    `• Tag: ${escapeSlackText(displayValue(proposal.fields.tag, "Leave blank"))}`,
+    "• Main Image: attached 1920x1080 Blog Image",
+    "*Left blank or collection default*",
+    "• Post Summary, Thumbnail Image, Featured?, Color, Writer, Writer Profile Image, Category, Slide Show Popup, Created On (Inputted)",
+    "The Markdown file contains the full body and the value for every field above."
   ];
-
-  const fieldSources = [
-    sourceLine("Title source", proposal.source_selections.title),
-    ...proposal.source_selections.body_markdown
-      .slice(0, MAX_VISIBLE_BODY_SOURCES)
-      .map((source, index) => `• Body source ${index + 1} ← ${source.message_timestamp}`),
-    sourceLine("Publication date source", proposal.source_selections.publication_date),
-    sourceLine("Source URL source", proposal.source_selections.source_url),
-    sourceLine("Thumbnail brief source", proposal.source_selections.thumbnail_brief),
-    sourceLine("Banner brief source", proposal.source_selections.banner_brief)
-  ].filter((line): line is string => line !== null);
-
-  if (fieldSources.length > 0) {
-    lines.push("*Exact transfer sources (field ← Slack message timestamp)*", ...fieldSources);
-
-    const hiddenSourceCount = proposal.source_selections.body_markdown.length - MAX_VISIBLE_BODY_SOURCES;
-    if (hiddenSourceCount > 0) {
-      lines.push(`• ${hiddenSourceCount} additional exact body source${hiddenSourceCount === 1 ? "" : "s"} omitted from this preview.`);
-    }
-  }
-
-  if (proposal.tag_selection.selected_tag && proposal.tag_selection.reason) {
-    lines.push(`• Tag rationale: ${escapeSlackText(truncate(proposal.tag_selection.reason, 180))} ← ${proposal.tag_selection.message_timestamps.join(", ")}`);
-  }
 
   if (proposal.missing_fields.length > 0) {
     lines.push(`• Missing: ${proposal.missing_fields.map(escapeSlackText).join(", ")}`);
@@ -81,6 +48,6 @@ export function formatProposalPreview(proposal: DraftProposal, messageCount: num
     lines.push(`• Explicitly blank: ${proposal.explicitly_blank.map(escapeSlackText).join(", ")}`);
   }
 
-  lines.push("Webflow CMS mapping and creation remain disabled until Slackflow reads the selected collection schema. After that, the approval card will show every actual CMS field Slackflow will fill and every field it will leave blank.");
+  lines.push("Webflow creation stays unavailable until the selected CMS schema is read and its real fields are validated.");
   return lines.join("\n");
 }

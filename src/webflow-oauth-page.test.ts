@@ -11,8 +11,8 @@ test("renders a safe, actionable Webflow OAuth confirmation page", () => {
   });
 
   assert.match(page, /Webflow is connected/);
-  assert.match(page, /confirmation has been posted in the Slack thread/);
-  assert.match(page, /Close this tab/);
+  assert.match(page, /original Slack confirmation has been updated/);
+  assert.match(page, /href="slack:\/\/open"/);
   assert.doesNotMatch(page, /<script/);
 });
 
