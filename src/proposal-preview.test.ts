@@ -43,8 +43,8 @@ test("shows a compact field checklist and escapes Slack markup", () => {
   assert.match(preview, /Slug: a-safe-title/);
   assert.match(preview, /Tag: AI Industry/);
   assert.match(preview, /Post Body: attached Markdown file/);
+  assert.match(preview, /Post Summary: A body &lt;@U123&gt; &amp; details\./);
   assert.match(preview, /Writer: Datasaur/);
   assert.match(preview, /Left blank or collection default/);
-  assert.doesNotMatch(preview, /A body/);
   assert.match(preview, /real fields are validated/);
 });

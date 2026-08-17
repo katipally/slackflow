@@ -34,6 +34,7 @@ export function renderWebflowOAuthPage(page: OAuthPage): string {
       p { color: var(--muted); font-size: 17px; line-height: 1.55; margin: 16px 0 0; }
       .note { border-top: 1px solid var(--line); font-size: 14px; margin-top: 28px; padding-top: 20px; }
       .button { background: var(--ink); border-radius: 10px; color: var(--surface); display: inline-block; font: inherit; font-weight: 700; margin-top: 28px; padding: 12px 16px; text-decoration: none; }
+      .button.secondary { background: transparent; border: 1px solid var(--line); color: var(--ink); cursor: pointer; margin-left: 8px; }
       .button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
       .button:active { transform: translateY(1px); }
     </style>
@@ -47,6 +48,7 @@ export function renderWebflowOAuthPage(page: OAuthPage): string {
         <p>${detail}</p>
         <p class="note">The original Slack confirmation has been updated. If Slack does not open from the button, switch back to its tab or app manually.</p>
         <a class="button" href="slack://open">Open Slack</a>
+        <button class="button secondary" type="button" onclick="window.close()">Close tab</button>
       </section>
     </main>
   </body>

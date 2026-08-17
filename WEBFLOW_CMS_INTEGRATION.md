@@ -1,6 +1,6 @@
 # Webflow CMS Draft Integration Contract
 
-**Status:** Webflow OAuth and a Forge Blog Posts schema were verified on 2026-08-16. Slackflow can read a selected schema, validate a narrow mapping, upload one approved image asset, and create one unpublished CMS draft after an explicit Slack confirmation.
+**Status:** Webflow OAuth and a Forge Blog Posts schema were verified on 2026-08-16. The deterministic upload and create path has been audited and tested locally on 2026-08-17; one live Render approval is still required to verify the current Webflow OAuth scopes and presigned upload target.
 
 **Verified on:** 2026-08-16
 
@@ -39,7 +39,7 @@ The implemented flow connects in this order:
 2. An authorized Webflow user completes the browser OAuth consent and selects the allowed site(s).
 3. Store refresh/access credentials encrypted outside the repository; never in Slack, `.env.example`, logs, or model context.
 4. From deterministic code, call only `get_collection_list` and `get_collection_details` to capture the target site, collection, field definitions, and option IDs.
-5. Display the generated confirmation form in Slack. On an explicit Slack confirmation, upload the reviewed image when an exact Image field exists, then call `create_collection_items` with `isDraft: true`. Slackflow never calls the publish action.
+5. Display the generated confirmation form in Slack. On an explicit Slack confirmation, upload the reviewed image when an exact Image field exists, then call `create_collection_items` with the complete `fieldData` object. Webflow creates these items as drafts by contract; Slackflow never calls the publish action.
 
 The image path is deliberately separate: after the approved `gpt-image-2` call returns image bytes, deterministic code uses `data_assets_tool.create_asset`, uploads those bytes to Webflow's returned presigned target, and only then places the returned asset reference into an explicitly approved CMS image field. No model gets a broad Webflow MCP tool, and no generated image becomes a CMS asset automatically.
 
@@ -151,8 +151,8 @@ Webflow's `data_assets_tool` upload is two steps: (1) `create_asset` gets a pres
 2. Build the confirmation form and stop on every unmapped required or incompatible field.
 3. Require an explicit Slack confirmation for the exact form.
 4. Call the fixed create-draft action for the configured collection only.
-5. Read the created item back and verify it is a draft, not archived, and has no publication timestamp.
-6. Reply with the CMS item ID/link and an audit record.
+5. Accept the returned CMS item ID and, when Webflow includes the draft flag, verify it is marked as a draft. Slackflow never calls a publish action; if Webflow returns a non-draft result, the approval is consumed and the user is told to check Webflow before retrying.
+6. Reply with the CMS item ID/link and an audit record. If the CMS call may have timed out, check Webflow before retrying so a second item is not created.
 
 ## Official sources
 

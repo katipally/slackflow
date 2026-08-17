@@ -417,8 +417,26 @@ export class WebflowMcpConnection {
     }
 
     const response = await uploadWebflowAsset(upload, input);
-    if (!response.ok) throw new Error(await webflowUploadError(response));
-    return { id: upload.id, url: upload.url };
+    if (!response.ok) {
+      const uploadMethod = "Policy" in upload.uploadDetails || "policy" in upload.uploadDetails ? "POST" : "PUT";
+      const detailKeys = Object.keys(upload.uploadDetails).sort().join(", ");
+      const scopeHint = response.status === 403 ? " Check the Webflow OAuth connection includes assets:write, then reconnect and retry." : "";
+      throw new Error(`${await webflowUploadError(response)}${scopeHint} Upload target: ${new URL(upload.uploadUrl).host}, method ${uploadMethod}, signed fields [${detailKeys}].`);
+    }
+
+    // Webflow normally returns the final hosted URL with create_asset. Only
+    // perform a read-back when it omitted that URL; the CMS image field must
+    // never receive the presigned upload URL.
+    if (upload.url) return { id: upload.id, url: upload.url };
+    const savedAsset = await this.callTool(
+      "data_assets_tool",
+      createWebflowDataToolRequest(
+        "Slackflow confirms the uploaded image asset before mapping it into the new CMS draft.",
+        "Confirm uploaded CMS draft image asset",
+        { get_asset: { asset_id: upload.id } }
+      )
+    );
+    return { id: upload.id, url: findAssetUrl(savedAsset.data) };
   }
 
   async createCollectionDraft(input: { collectionId: string; fieldData: Record<string, unknown> }): Promise<WebflowCreatedItem> {
@@ -427,7 +445,7 @@ export class WebflowMcpConnection {
       createWebflowDataToolRequest(
         "Slackflow creates one explicitly approved unpublished CMS draft using the previously validated field mapping.",
         "Create unpublished CMS draft",
-        { create_collection_items: { collection_id: input.collectionId, request: { fieldData: input.fieldData, isArchived: false, isDraft: true } } }
+        { create_collection_items: { collection_id: input.collectionId, request: { fieldData: input.fieldData } } }
       )
     );
     const item = findCreatedItem(result.data);
@@ -573,9 +591,35 @@ async function uploadWebflowAsset(target: AssetUploadTarget, input: { file: Buff
 async function webflowUploadError(response: Response): Promise<string> {
   const body = await response.text().catch(() => "");
   const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1];
+  const message = body.match(/<Message>([^<]+)<\/Message>/i)?.[1];
   const requestId = body.match(/<RequestId>([^<]+)<\/RequestId>/i)?.[1];
-  const suffix = [code, requestId ? `request ${requestId}` : undefined].filter(Boolean).join(", ");
+  const suffix = [code, message && message !== code ? message : undefined, requestId ? `request ${requestId}` : undefined].filter(Boolean).join(", ");
   return `Webflow image upload failed with status ${response.status}${suffix ? ` (${suffix})` : ""}.`;
+}
+
+function findAssetUrl(value: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  const visit = (item: unknown): string | undefined => {
+    if (!item || typeof item !== "object" || seen.has(item)) return undefined;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    for (const key of ["hostedUrl", "assetUrl", "url"]) {
+      if (typeof record[key] === "string" && record[key].trim()) return record[key];
+    }
+    for (const child of Object.values(record)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(value);
 }
 
 function findAssetUpload(value: unknown): AssetUploadTarget | undefined {

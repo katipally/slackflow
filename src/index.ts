@@ -14,7 +14,7 @@ import { SlackflowRunStore } from "./run-store.js";
 import { parseSlackflowCommand, type SlackflowCommand } from "./slack-command.js";
 import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
-import { WebflowMcpConnection } from "./webflow-mcp.js";
+import { WebflowMcpConnection, type WebflowCreatedItem } from "./webflow-mcp.js";
 import { renderWebflowOAuthPage } from "./webflow-oauth-page.js";
 import { applyWebflowImageToDraft, assertSchemaMatchesContract, createWebflowDraftContract, createWebflowDraftMapping, type WebflowDraftContract, type WebflowDraftMapping } from "./webflow-draft.js";
 
@@ -337,23 +337,38 @@ async function handleHttpRequest(request: import("node:http").IncomingMessage, r
       if (!requestId) throw new Error("Missing Webflow connection request.");
       const slackContext = await webflowConnection.completeAuthorization(requestId, requestUrl.searchParams);
       if (slackContext) {
-        try {
-          if (slackContext.messageTs) {
+        if (slackContext.messageTs) {
+          try {
             await app.client.chat.update({
               blocks: webflowConnectedBlocks(),
               channel: slackContext.channel,
               text: "Webflow connected. Run @slackflow schema in this thread to choose the target website and CMS collection.",
               ts: slackContext.messageTs
             });
-          } else {
+          } catch {
+            app.logger.error("Webflow OAuth completed but the original Slack connection card could not be updated");
+            try {
+              await app.client.chat.postMessage({
+                channel: slackContext.channel,
+                thread_ts: slackContext.threadTs,
+                blocks: webflowConnectedBlocks(),
+                text: ":white_check_mark: Webflow connected. Run @slackflow schema in this thread to choose the target website and CMS collection."
+              });
+            } catch {
+              app.logger.error("Webflow OAuth completed but Slackflow could not post the fallback thread confirmation");
+            }
+          }
+        } else {
+          try {
             await app.client.chat.postMessage({
               channel: slackContext.channel,
               thread_ts: slackContext.threadTs,
-              text: ":white_check_mark: *Webflow connected*\nRun `@slackflow schema` in this thread to choose the target website and CMS collection."
+              blocks: webflowConnectedBlocks(),
+              text: ":white_check_mark: Webflow connected. Run @slackflow schema in this thread to choose the target website and CMS collection."
             });
+          } catch {
+            app.logger.error("Webflow OAuth completed but Slackflow could not post the thread confirmation");
           }
-        } catch {
-          app.logger.error("Webflow OAuth completed but Slackflow could not post the thread confirmation");
         }
       }
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -681,6 +696,7 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
   }
   if (pending.inFlight) return;
   pending.inFlight = true;
+  let createdItem: WebflowCreatedItem | undefined;
 
   try {
     const liveSchema = await webflowConnection.getCollectionDetails(pending.mapping.collectionId);
@@ -696,27 +712,32 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
       pending.uploadedAsset = asset;
       fieldData = applyWebflowImageToDraft(pending.mapping, { ...asset, altText: pending.image.altText });
     }
-    const item = await webflowConnection.createCollectionDraft({ collectionId: pending.mapping.collectionId, fieldData });
-    if (item.isDraft === false) {
+    createdItem = await webflowConnection.createCollectionDraft({ collectionId: pending.mapping.collectionId, fieldData });
+    if (createdItem.isDraft === false) {
+      pendingWebflowDrafts.delete(draftId);
       throw new Error("Webflow returned an item that was not marked as a draft. Slackflow did not publish it, but stop and check Webflow before retrying.");
     }
     pendingWebflowDrafts.delete(draftId);
     const title = typeof pending.mapping.fieldData.name === "string" ? pending.mapping.fieldData.name : "Webflow draft";
-    const blocks = webflowDraftCreatedBlocks({ itemId: item.id, title, editorUrl: item.editorUrl });
+    const blocks = webflowDraftCreatedBlocks({ itemId: createdItem.id, title, editorUrl: createdItem.editorUrl });
     const messageTs = actionMessageTs(body);
     if (messageTs) {
       await client.chat.update({ channel: context.channel, ts: messageTs, text: `Webflow draft created: ${title}`, blocks });
     } else {
       await client.chat.postMessage({ channel: context.channel, thread_ts: pending.rootTs, text: `:white_check_mark: Webflow draft created: ${title}`, blocks });
     }
-    logger.info({ collectionId: pending.mapping.collectionId, itemId: item.id, rootTs: pending.rootTs }, "Created approved unpublished Webflow CMS draft");
+    logger.info({ collectionId: pending.mapping.collectionId, itemId: createdItem.id, rootTs: pending.rootTs }, "Created approved unpublished Webflow CMS draft");
   } catch (error) {
-    pending.inFlight = false;
+    if (pendingWebflowDrafts.has(draftId)) pending.inFlight = false;
     logger.error(error, "Failed to create approved Webflow CMS draft");
     const message = error instanceof Error ? error.message : "";
-    const retryText = /not marked as a draft/i.test(message)
+    const nonDraftResult = /not marked as a draft/i.test(message);
+    const createdButSlackUpdateFailed = Boolean(createdItem) && !nonDraftResult;
+    const retryText = nonDraftResult
       ? "Do not retry this button. Check the item in Webflow first."
-      : "You can try the same Create Webflow draft button again.";
+      : createdButSlackUpdateFailed
+        ? `Webflow returned item \`${createdItem?.id}\`, so do not retry. Check Webflow before taking any further action.`
+        : "If Webflow shows no new item, you can try the same Create Webflow draft button again. If the request may have timed out, check Webflow first to avoid a duplicate.";
     await client.chat.postMessage({
       channel: context.channel,
       thread_ts: pending.rootTs,

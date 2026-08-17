@@ -37,6 +37,65 @@ test("maps only the fixed verified Forge Blog Post fields and fixes Writer to Da
   });
 });
 
+test("maps provided date and source fields only when the selected schema exposes them", () => {
+  const contract = createWebflowDraftContract({
+    collectionId: "collection",
+    schema: {
+      fields: [
+        ...schema.fields,
+        { displayName: "Created On (Inputted)", slug: "created-on-inputted", type: "Date", isRequired: false },
+        { displayName: "Source URL", slug: "source-url", type: "Link", isRequired: false }
+      ]
+    }
+  });
+  const mapping = createWebflowDraftMapping({
+    contract,
+    proposal: {
+      ...proposal,
+      fields: { ...proposal.fields, publication_date: "2026-08-15", source_url: "https://example.com/source" }
+    } as DraftProposal
+  });
+  assert.equal(mapping.fieldData["created-on-inputted"], "2026-08-15");
+  assert.equal(mapping.fieldData["source-url"], "https://example.com/source");
+  assert.equal(contract.approvedBlankFields.includes("Created On (Inputted)"), false);
+});
+
+test("does not invent a time for a Date/Time CMS field", () => {
+  const contract = createWebflowDraftContract({
+    collectionId: "collection",
+    schema: {
+      fields: [...schema.fields, { displayName: "Publication Date", slug: "publication-date", type: "Date/Time", isRequired: false }]
+    }
+  });
+  assert.throws(() => createWebflowDraftMapping({
+    contract,
+    proposal: { ...proposal, fields: { ...proposal.fields, publication_date: "2026-08-15" } } as DraftProposal
+  }), /will not invent a time/);
+});
+
+test("blocks a non-URL source value for a Webflow Link field", () => {
+  const contract = createWebflowDraftContract({
+    collectionId: "collection",
+    schema: {
+      fields: [...schema.fields, { displayName: "Source URL", slug: "source-url", type: "Link", isRequired: false }]
+    }
+  });
+  assert.throws(() => createWebflowDraftMapping({
+    contract,
+    proposal: { ...proposal, fields: { ...proposal.fields, source_url: "<https://example.com|source>" } } as DraftProposal
+  }), /will not rewrite/);
+});
+
+test("blocks a required source field when the reviewed thread did not provide one", () => {
+  const contract = createWebflowDraftContract({
+    collectionId: "collection",
+    schema: {
+      fields: [...schema.fields, { displayName: "Source URL", slug: "source-url", type: "Link", isRequired: true }]
+    }
+  });
+  assert.throws(() => createWebflowDraftMapping({ contract, proposal }), /requires a source URL/);
+});
+
 test("does not guess unexpected required CMS fields", () => {
   assert.throws(() => createWebflowDraftContract({
     collectionId: "collection",
@@ -52,6 +111,13 @@ test("blocks a changed collection schema after the contract is captured", () => 
 
 test("HTML conversion preserves source text without writing new prose", () => {
   assert.equal(markdownToWebflowHtml("A & B\n<literal>"), "<p>A &amp; B<br>&lt;literal&gt;</p>");
+});
+
+test("HTML conversion deterministically preserves headings, lists, links, and inline formatting", () => {
+  assert.equal(
+    markdownToWebflowHtml("# Heading\n\n- One\n- Two\n\n**bold** and [source](https://example.com)"),
+    '<h1>Heading</h1><ul><li>One</li><li>Two</li></ul><p><strong>bold</strong> and <a href="https://example.com">source</a></p>'
+  );
 });
 
 test("extractive post summary copies only text from the reviewed body", () => {
