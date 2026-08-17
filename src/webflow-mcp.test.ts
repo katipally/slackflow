@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createWebflowDataToolRequest, WebflowMcpConnection } from "./webflow-mcp.js";
+import { createWebflowDataToolRequest, WebflowMcpConnection, webflowS3FieldName } from "./webflow-mcp.js";
 
 const encryptionKey = Buffer.alloc(32, 9).toString("base64");
 
@@ -13,6 +13,15 @@ test("builds hosted Webflow data-tool requests with required context and action 
       context: "List sites for target selection."
     }
   );
+});
+
+test("normalizes MCP camelCase asset fields to the exact S3 signed field names", () => {
+  assert.equal(webflowS3FieldName("cacheControl"), "Cache-Control");
+  assert.equal(webflowS3FieldName("contentType"), "content-type");
+  assert.equal(webflowS3FieldName("successActionStatus"), "success_action_status");
+  assert.equal(webflowS3FieldName("xAmzAlgorithm"), "X-Amz-Algorithm");
+  assert.equal(webflowS3FieldName("X-Amz-Signature"), "X-Amz-Signature");
+  assert.equal(webflowS3FieldName("acl"), "acl");
 });
 
 test("requires a complete secure configuration before creating a Webflow OAuth link", () => {

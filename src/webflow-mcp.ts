@@ -400,6 +400,10 @@ export class WebflowMcpConnection {
     mimeType: string;
     siteId: string;
   }): Promise<WebflowAsset> {
+    if (input.file.byteLength > 4 * 1024 * 1024) {
+      throw new Error("The reviewed Blog Image is larger than Webflow's 4 MB asset-upload limit.");
+    }
+
     const fileHash = createHash("md5").update(input.file).digest("hex");
     const result = await this.callTool(
       "data_assets_tool",
@@ -411,10 +415,6 @@ export class WebflowMcpConnection {
     );
     const upload = findAssetUpload(result.data);
     if (!upload) throw new Error("Webflow did not return an upload target for the approved image asset.");
-
-    if (input.file.byteLength > 4 * 1024 * 1024) {
-      throw new Error("The reviewed Blog Image is larger than Webflow's 4 MB asset-upload limit.");
-    }
 
     const response = await uploadWebflowAsset(upload, input);
     if (!response.ok) {
@@ -563,6 +563,27 @@ function parseJson(value: string): unknown {
 
 type AssetUploadTarget = { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string };
 
+/**
+ * The MCP JSON schema may expose S3 POST fields as camelCase, while the
+ * signed policy requires the exact S3 wire names. Preserve already-correct
+ * names and normalize only the known fields.
+ */
+export function webflowS3FieldName(name: string): string {
+  const normalized = name.replaceAll("-", "").replaceAll("_", "").toLowerCase();
+  const names: Record<string, string> = {
+    cachecontrol: "Cache-Control",
+    contenttype: "content-type",
+    policy: "Policy",
+    successactionstatus: "success_action_status",
+    xamzalgorithm: "X-Amz-Algorithm",
+    xamzcredential: "X-Amz-Credential",
+    xamzdate: "X-Amz-Date",
+    xamzsecuritytoken: "X-Amz-Security-Token",
+    xamzsignature: "X-Amz-Signature"
+  };
+  return names[normalized] ?? name;
+}
+
 async function uploadWebflowAsset(target: AssetUploadTarget, input: { file: Buffer; filename: string; mimeType: string }): Promise<Response> {
   const entries = Object.entries(target.uploadDetails);
   if (entries.some(([, value]) => typeof value !== "string" && typeof value !== "number")) {
@@ -571,13 +592,14 @@ async function uploadWebflowAsset(target: AssetUploadTarget, input: { file: Buff
 
   const uploadBytes = new Uint8Array(input.file.byteLength);
   uploadBytes.set(input.file);
-  const contentType = typeof target.uploadDetails["content-type"] === "string" ? target.uploadDetails["content-type"] : input.mimeType;
+  const signedContentType = entries.find(([key, value]) => webflowS3FieldName(key).toLowerCase() === "content-type" && typeof value === "string")?.[1];
+  const contentType = typeof signedContentType === "string" ? signedContentType : input.mimeType;
 
-  // Webflow returns an S3 POST policy when it includes Policy. The form fields
-  // must be sent unchanged and the file must be the final multipart field.
+  // Webflow returns an S3 POST policy when it includes Policy. Preserve every
+  // signed value, use its exact S3 wire field name, and append file last.
   if ("Policy" in target.uploadDetails || "policy" in target.uploadDetails) {
     const form = new FormData();
-    for (const [key, value] of entries) form.append(key, String(value));
+    for (const [key, value] of entries) form.append(webflowS3FieldName(key), String(value));
     form.append("file", new Blob([uploadBytes], { type: contentType }), input.filename);
     return fetch(target.uploadUrl, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
   }
