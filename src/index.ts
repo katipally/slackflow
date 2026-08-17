@@ -1,11 +1,14 @@
 import { App, LogLevel } from "@slack/bolt";
+import type { KnownBlock } from "@slack/types";
 import type { WebClient } from "@slack/web-api";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 
 import { config } from "./config.js";
-import { generateSlackImagePreview } from "./image-preview.js";
+import { generateSlackImagePreview, type GeneratedImagePreview } from "./image-preview.js";
 import { createImageGenerationProvider } from "./images/create-provider.js";
 import { createDraftModelProvider } from "./llm/create-provider.js";
+import type { DraftProposal } from "./llm/contracts.js";
 import { formatProposalPreview } from "./proposal-preview.js";
 import { SlackflowRunStore } from "./run-store.js";
 import { parseSlackflowCommand, type SlackflowCommand } from "./slack-command.js";
@@ -13,6 +16,7 @@ import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
 import { WebflowMcpConnection } from "./webflow-mcp.js";
 import { renderWebflowOAuthPage } from "./webflow-oauth-page.js";
+import { applyWebflowImageToDraft, assertSchemaMatchesContract, createWebflowDraftContract, createWebflowDraftMapping, type WebflowDraftContract, type WebflowDraftMapping } from "./webflow-draft.js";
 
 const app = new App({
   appToken: config.slack.appToken,
@@ -35,6 +39,31 @@ const healthServer = createServer((request, response) => {
 });
 
 let cachedBotIdentity: { botId?: string; userId: string } | undefined;
+const PENDING_WEBFLOW_DRAFT_TTL_MS = 15 * 60 * 1000;
+
+type PendingWebflowDraft = {
+  channel: string;
+  contract: WebflowDraftContract;
+  expiresAt: number;
+  image: GeneratedImagePreview["webflowImage"];
+  inFlight: boolean;
+  mapping: WebflowDraftMapping;
+  rootTs: string;
+  siteId: string;
+  uploadedAsset?: { id: string; url?: string };
+};
+
+const pendingWebflowDrafts = new Map<string, PendingWebflowDraft>();
+
+function storePendingWebflowDraft(input: Omit<PendingWebflowDraft, "expiresAt" | "inFlight">): string {
+  const now = Date.now();
+  for (const [id, pending] of pendingWebflowDrafts) {
+    if (pending.expiresAt <= now) pendingWebflowDrafts.delete(id);
+  }
+  const id = randomUUID();
+  pendingWebflowDrafts.set(id, { ...input, expiresAt: now + PENDING_WEBFLOW_DRAFT_TTL_MS, inFlight: false });
+  return id;
+}
 
 function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect" | "draft" | "status" | null>): string {
   switch (command) {
@@ -46,7 +75,7 @@ function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect
         "• `@slackflow connect` posts a one-time Webflow OAuth link in this thread.",
         "• `@slackflow schema` reads a selected Webflow CMS schema only.",
         "• `@slackflow disconnect` removes Slackflow's encrypted local Webflow connection.",
-        "Webflow draft creation stays off until Slackflow validates the selected CMS schema."
+        "After a matching CMS schema is captured, `@slackflow draft` offers an explicit Create Webflow draft button. It creates an unpublished item only."
       ].join("\n");
     case "schema":
       return ":information_source: Run `@slackflow schema` to choose a website and read its CMS fields. This step is read-only.";
@@ -75,7 +104,10 @@ function webflowStatusReply(): string {
   lines.push(schema.state === "read"
     ? `• Webflow CMS schema: read for collection ${schema.collectionId} at ${new Date(schema.readAt).toISOString()}`
     : "• Webflow CMS schema: not read");
-  lines.push("• Webflow writes and publishing: disabled");
+  lines.push(schema.state === "read"
+    ? "• Webflow drafts: available after Slackflow validates each reviewed proposal and you confirm it"
+    : "• Webflow drafts: unavailable until a CMS schema is selected and captured");
+  lines.push("• Webflow publishing: disabled");
   return lines.join("\n");
 }
 
@@ -152,6 +184,12 @@ function actionContext(body: unknown): { channel: string; threadTs?: string; use
   return { channel: value.channel.id, threadTs: typeof value.container?.thread_ts === "string" ? value.container.thread_ts : undefined, user: value.user.id };
 }
 
+function actionMessageTs(body: unknown): string | undefined {
+  if (!body || typeof body !== "object") return undefined;
+  const value = body as { container?: { message_ts?: unknown } };
+  return typeof value.container?.message_ts === "string" ? value.container.message_ts : undefined;
+}
+
 function actionValue(action: unknown): string | undefined {
   if (!action || typeof action !== "object") return undefined;
   const value = action as { selected_option?: { value?: unknown }; value?: unknown };
@@ -207,6 +245,47 @@ function webflowConnectedBlocks() {
       type: "section" as const
     }
   ];
+}
+
+function webflowDraftApprovalBlocks(input: { draftId: string; mapping: WebflowDraftMapping }) {
+  const values = input.mapping.filledFields.map((field) => `• *${field.label}:* ${field.value}`).join("\n");
+  const imageFields = input.mapping.imageFieldSlugs.length > 0
+    ? "• *Main Image and Thumbnail image:* the one attached 1920x1080 Blog Image"
+    : "• *Blog Image:* attached for review only. The selected schema has no mapped image fields.";
+  return [
+    { type: "header" as const, text: { type: "plain_text" as const, text: "Create Webflow draft?", emoji: true } },
+    { type: "section" as const, text: { type: "mrkdwn" as const, text: `${values}\n${imageFields}\n\nAll other CMS fields stay blank or at their collection default.` } },
+    { type: "section" as const, text: { type: "mrkdwn" as const, text: "This uploads one image asset if needed and creates one *unpublished* CMS draft. It never publishes the item." } },
+    {
+      type: "actions" as const,
+      elements: [{
+        type: "button" as const,
+        action_id: "slackflow_create_webflow_draft",
+        style: "primary" as const,
+        text: { type: "plain_text" as const, text: "Create Webflow draft", emoji: true },
+        value: input.draftId,
+        confirm: {
+          title: { type: "plain_text" as const, text: "Create unpublished Webflow draft?", emoji: true },
+          text: { type: "mrkdwn" as const, text: "Slackflow will upload the reviewed image and create one CMS item as a draft. It will not publish it." },
+          confirm: { type: "plain_text" as const, text: "Create draft", emoji: true },
+          deny: { type: "plain_text" as const, text: "Cancel", emoji: true }
+        }
+      }]
+    }
+  ];
+}
+
+function webflowDraftCreatedBlocks(input: { itemId: string; title: string; editorUrl?: string }): KnownBlock[] {
+  const blocks: KnownBlock[] = [
+    { type: "header", text: { type: "plain_text", text: "Webflow draft created", emoji: true } },
+    { type: "section", text: { type: "mrkdwn", text: `:white_check_mark: *${input.title}* was created as an unpublished Webflow CMS draft.\n• Item ID: \`${input.itemId}\`\n• Status: Draft only. Publishing remains disabled.` } }
+  ];
+  if (input.editorUrl) {
+    blocks.push({ type: "actions", elements: [{ type: "button", text: { type: "plain_text", text: "Open Webflow draft", emoji: true }, url: input.editorUrl }] });
+  } else {
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: "Webflow did not return a direct editor URL. Open the selected Forge Blog Posts collection in Webflow and find the item by title." } });
+  }
+  return blocks;
 }
 
 async function handleConnectCommand(client: WebClient, channel: string, threadTs: string): Promise<void> {
@@ -464,6 +543,42 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
         return;
       }
 
+      const savedSchema = webflowConnection.getSavedSchema();
+      if (savedSchema) {
+        try {
+          if (!savedSchema.contract) throw new Error("The selected schema has no saved draft contract. Run @slackflow schema again.");
+          assertSchemaMatchesContract(savedSchema.schema, savedSchema.contract);
+          const mapping = createWebflowDraftMapping({ contract: savedSchema.contract, proposal: extraction.proposal });
+          const draftId = storePendingWebflowDraft({
+            channel: event.channel,
+            contract: savedSchema.contract,
+            image: imagePreview.webflowImage,
+            mapping,
+            rootTs,
+            siteId: savedSchema.siteId
+          });
+          await client.chat.postMessage({
+            blocks: webflowDraftApprovalBlocks({ draftId, mapping }),
+            channel: event.channel,
+            text: "Review the validated Webflow field values, then choose Create Webflow draft to create an unpublished CMS item.",
+            thread_ts: rootTs
+          });
+        } catch (error) {
+          logger.warn(error, "The reviewed Slackflow proposal is not eligible for Webflow creation with the captured schema");
+          await client.chat.postMessage({
+            channel: event.channel,
+            text: `:information_source: The review files are ready, but no Webflow creation button was shown because the captured CMS schema cannot safely map this proposal. *Reason:* ${safeWebflowReadError(error)}`,
+            thread_ts: rootTs
+          });
+        }
+      } else {
+        await client.chat.postMessage({
+          channel: event.channel,
+          text: ":information_source: The review files are ready. Run `@slackflow schema` in this thread to select and capture the target CMS collection before Slackflow can offer Webflow draft creation.",
+          thread_ts: rootTs
+        });
+      }
+
       runStore.mark(body.event_id, "completed");
 
       logger.info(
@@ -492,7 +607,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       removedCommandCount: transcript.filtering.removedCommand,
       removedSlackflowCount: transcript.filtering.removedSlackflow,
       rootTs
-    }, "Created no-write Slackflow draft proposal");
+    }, "Created Slackflow review proposal");
   } catch (error) {
     runStore.mark(body.event_id, "failed");
     logger.error(error, "Failed to prepare Slackflow draft proposal");
@@ -537,23 +652,94 @@ app.action("slackflow_select_collection", async ({ ack, action, body, client, lo
     const selection = JSON.parse(value) as { collectionId?: unknown; siteId?: unknown };
     if (typeof selection.collectionId !== "string" || typeof selection.siteId !== "string") throw new Error("Invalid CMS collection selection.");
     const details = await webflowConnection.getCollectionDetails(selection.collectionId);
-    webflowConnection.saveSchema(selection.siteId, selection.collectionId, details.data);
     const fields = fieldLabelsFromWebflowData(details.data);
     const fieldsText = fields.length ? fields.map((field) => `• ${field}`).join("\n") : "• Webflow returned the collection schema, but Slackflow could not summarize its fields.";
+    let contract: WebflowDraftContract | undefined;
+    let contractText: string;
+    try {
+      contract = createWebflowDraftContract({ collectionId: selection.collectionId, schema: details.data });
+      webflowConnection.saveSchema(selection.siteId, selection.collectionId, details.data, contract);
+      contractText = `*Draft contract:* ready (fingerprint \`${contract.schemaFingerprint.slice(0, 12)}…\`)\nIt fixes Writer to *Datasaur*, accepts only verified Tag option IDs, leaves its approved fields blank, and blocks unexpected required fields. Slackflow will re-check this contract before every create.`;
+    } catch (error) {
+      webflowConnection.saveSchema(selection.siteId, selection.collectionId, details.data);
+      contractText = `:warning: *Draft contract:* blocked\n${safeWebflowReadError(error)}\nNo Webflow create button will appear until this collection has a safe fixed mapping.`;
+    }
     await client.chat.postEphemeral({
       channel: context.channel,
       user: context.user,
       thread_ts: context.threadTs,
-      text: "Slackflow captured the Webflow CMS schema. CMS writes are still disabled.",
+      text: contract ? "Slackflow captured the Webflow CMS schema and its draft contract." : "Slackflow captured the Webflow CMS schema, but its draft contract is blocked.",
       blocks: [
         { type: "header", text: { type: "plain_text", text: "CMS schema captured", emoji: true } },
         { type: "section", text: { type: "mrkdwn", text: `*Collection ID:* \`${selection.collectionId}\`\n*Fields found:*\n${fieldsText}` } },
-        { type: "section", text: { type: "mrkdwn", text: "Next, Slackflow will validate a fixed field mapping against this exact schema. It will not create a CMS item until that mapping is complete and you explicitly confirm the draft." } }
+        { type: "section", text: { type: "mrkdwn", text: contractText } }
       ]
     });
   } catch (error) {
     logger.error(error, "Failed to read Webflow CMS collection schema");
     await client.chat.postEphemeral({ channel: context.channel, user: context.user, text: `:warning: Slackflow could not read this CMS collection schema. No CMS change was made.\n*Reason:* ${safeWebflowReadError(error)}\nRun \`@slackflow schema\` and try again.` });
+  }
+});
+
+app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client, logger }) => {
+  await ack();
+  const context = actionContext(body);
+  const draftId = actionValue(action);
+  if (!context || !draftId) return;
+
+  const pending = pendingWebflowDrafts.get(draftId);
+  if (!pending || pending.expiresAt <= Date.now()) {
+    pendingWebflowDrafts.delete(draftId);
+    await client.chat.postMessage({ channel: context.channel, thread_ts: context.threadTs, text: ":information_source: This review approval has expired or Slackflow restarted. Run `@slackflow draft` again to create a new review." });
+    return;
+  }
+  if (pending.channel !== context.channel || pending.rootTs !== context.threadTs) {
+    logger.warn({ draftId }, "Rejected a Webflow draft approval outside its original Slack thread");
+    return;
+  }
+  if (pending.inFlight) return;
+  pending.inFlight = true;
+
+  try {
+    const liveSchema = await webflowConnection.getCollectionDetails(pending.mapping.collectionId);
+    assertSchemaMatchesContract(liveSchema.data, pending.contract);
+    let fieldData = pending.mapping.fieldData;
+    if (pending.mapping.imageFieldSlugs.length > 0) {
+      const asset = pending.uploadedAsset ?? await webflowConnection.uploadImageAsset({
+        file: pending.image.file,
+        filename: pending.image.filename,
+        mimeType: pending.image.mimeType,
+        siteId: pending.siteId
+      });
+      pending.uploadedAsset = asset;
+      fieldData = applyWebflowImageToDraft(pending.mapping, { ...asset, altText: pending.image.altText });
+    }
+    const item = await webflowConnection.createCollectionDraft({ collectionId: pending.mapping.collectionId, fieldData });
+    if (item.isDraft === false) {
+      throw new Error("Webflow returned an item that was not marked as a draft. Slackflow did not publish it, but stop and check Webflow before retrying.");
+    }
+    pendingWebflowDrafts.delete(draftId);
+    const title = typeof pending.mapping.fieldData.name === "string" ? pending.mapping.fieldData.name : "Webflow draft";
+    const blocks = webflowDraftCreatedBlocks({ itemId: item.id, title, editorUrl: item.editorUrl });
+    const messageTs = actionMessageTs(body);
+    if (messageTs) {
+      await client.chat.update({ channel: context.channel, ts: messageTs, text: `Webflow draft created: ${title}`, blocks });
+    } else {
+      await client.chat.postMessage({ channel: context.channel, thread_ts: pending.rootTs, text: `:white_check_mark: Webflow draft created: ${title}`, blocks });
+    }
+    logger.info({ collectionId: pending.mapping.collectionId, itemId: item.id, rootTs: pending.rootTs }, "Created approved unpublished Webflow CMS draft");
+  } catch (error) {
+    pending.inFlight = false;
+    logger.error(error, "Failed to create approved Webflow CMS draft");
+    const message = error instanceof Error ? error.message : "";
+    const retryText = /not marked as a draft/i.test(message)
+      ? "Do not retry this button. Check the item in Webflow first."
+      : "You can try the same Create Webflow draft button again.";
+    await client.chat.postMessage({
+      channel: context.channel,
+      thread_ts: pending.rootTs,
+      text: `:warning: Slackflow could not confirm the Webflow draft result. *Reason:* ${safeWebflowReadError(error)}\n${retryText}`
+    });
   }
 });
 

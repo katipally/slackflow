@@ -1,6 +1,6 @@
 # Webflow CMS Draft Integration Contract
 
-**Status:** Webflow OAuth was verified against this account on 2026-08-16. Slackflow can now make the read-only site, collection-list, and collection-details calls. It stores the selected schema encrypted in its local SQLite state. No Webflow write capability has been added.
+**Status:** Webflow OAuth and a Forge Blog Posts schema were verified on 2026-08-16. Slackflow can read a selected schema, validate a narrow mapping, upload one approved image asset, and create one unpublished CMS draft after an explicit Slack confirmation.
 
 **Verified on:** 2026-08-16
 
@@ -23,23 +23,23 @@ The schema read is mandatory. We will not infer field names such as `blog-body`,
 Webflow documents access at the MCP **tool** level. `data_cms_tool` contains actions that can create, update, publish, unpublish, and delete CMS content. Therefore:
 
 - The model provider receives no Webflow/MCP tools and cannot select action names.
-- Slackflow's deterministic application code will have a fixed allowlist: `get_collection_list`, `get_collection_details`, and, after Slack approval, `create_collection_items` for one configured collection ID.
+- Slackflow's deterministic application code has a narrow allowlist: `list_sites`, `get_collection_list`, `get_collection_details`, and, after Slack approval, `create_asset` plus `create_collection_items` for the user-selected and schema-validated collection.
 - It will never use `publish_collection_items`, `update_collection_items`, `delete_collection_items`, or collection/field-creation actions.
-- The target site and collection ID will be fixed per environment; no value from Slack or the model can select a destination.
+- The target site and collection are selected by an interactive Slack schema flow. The model cannot select a destination. The create action uses only the encrypted, previously captured schema selection.
 
 ## Remote MCP connection gate
 
 The configured MCP endpoint is `https://mcp.webflow.com/mcp`. Slackflow's `@slackflow connect` command creates a private, short-lived connection link. The web route starts the MCP OAuth flow, validates the returned state, lets the MCP SDK validate the issuer and exchange the code, and stores the resulting credentials encrypted in the local SQLite state file. No credential is sent to Slack, the model, or logs.
 
-Slackflow recognizes `@slackflow connect`, `@slackflow status`, `@slackflow schema`, and `@slackflow disconnect`. `connect`, `status`, local `disconnect`, and the read-only `schema` flow are implemented. `schema` asks the user to choose a site and collection, then calls only `list_sites`, `get_collection_list`, and `get_collection_details`. It makes no Webflow change.
+Slackflow recognizes `@slackflow connect`, `@slackflow status`, `@slackflow schema`, `@slackflow draft`, and `@slackflow disconnect`. `schema` asks the user to choose a site and collection, then calls only `list_sites`, `get_collection_list`, and `get_collection_details`. It makes no Webflow change. `draft` posts the review files and only displays a create button after it validates the captured schema.
 
-The production implementation will connect in this order:
+The implemented flow connects in this order:
 
 1. Deploy Slackflow at a stable HTTPS origin and register/configure its OAuth callback in the MCP client implementation.
 2. An authorized Webflow user completes the browser OAuth consent and selects the allowed site(s).
 3. Store refresh/access credentials encrypted outside the repository; never in Slack, `.env.example`, logs, or model context.
-4. From deterministic code, call only `get_collection_list` and `get_collection_details` to capture the target site, collection, primary locale, field definitions, option IDs, reference IDs, and a schema fingerprint.
-5. Display the generated confirmation form in Slack. On an explicit Slack confirmation, call `create_collection_items` for the fixed collection, then read back and verify the resulting item is still a draft.
+4. From deterministic code, call only `get_collection_list` and `get_collection_details` to capture the target site, collection, field definitions, and option IDs.
+5. Display the generated confirmation form in Slack. On an explicit Slack confirmation, upload the reviewed image when an exact Image field exists, then call `create_collection_items` with `isDraft: true`. Slackflow never calls the publish action.
 
 The image path is deliberately separate: after the approved `gpt-image-2` call returns image bytes, deterministic code uses `data_assets_tool.create_asset`, uploads those bytes to Webflow's returned presigned target, and only then places the returned asset reference into an explicitly approved CMS image field. No model gets a broad Webflow MCP tool, and no generated image becomes a CMS asset automatically.
 
@@ -84,7 +84,7 @@ slug                           PlainText    <approved deterministic slug>
 <actual body field slug>       RichText     <HTML converted from reviewed body>
 <actual date field slug>       DateTime     <thread value or blank>
 <actual source field slug>     Link         <thread value or blank>
-<actual image field slug>      Image        blank — a text brief is not an image asset
+<actual image field slug>      Image        one reviewed generated image asset, if the field type is Image
 <each remaining required field> <actual>    mapped value or BLOCKED
 
 State: draft only; never publish
@@ -107,7 +107,7 @@ The supplied Webflow Designer screenshots show these fields. This is a content p
 | Thumbnail Image | File/image control | Same policy as Main Image. |
 | Featured? | Toggle | Leave at the Webflow default unless the thread explicitly says to feature the post. |
 | Color | Color input | Leave blank unless a valid color value is supplied. |
-| Writer | Required text-like control | Require an explicit per-post value or a separately approved environment default. Never infer it from the Slack author. |
+| Writer | Required text-like control | Set to the approved fixed value `Datasaur`. Never infer it from the Slack author. |
 | Tag | Required dropdown-like control | Require an explicit thread value or separately approved environment default, then resolve it to the schema option ID. |
 | Writer Profile Image | File/image control | Leave blank unless an approved image asset is supplied. |
 | Category | Token/reference-like control | Leave blank unless the thread supplies a category and a unique matching collection item can be resolved to its ID. |
@@ -118,7 +118,7 @@ The supplied Webflow Designer screenshots show these fields. This is a content p
 
 ### Required-field decision
 
-The screenshots visibly mark **Name**, **Slug**, **Writer**, and **Tag** as required. A new item cannot be created without valid values for all four. Slackflow can derive Name and Slug safely; Writer and Tag need a business rule approved by the site owner. The current item happens to show `Datasaur` for both, but Slackflow will not treat that as a default until it is explicitly approved.
+The screenshots visibly mark **Name**, **Slug**, **Writer**, and **Tag** as required. A new item cannot be created without valid values for all four. Slackflow derives Name and Slug deterministically, uses the approved Writer value `Datasaur`, and resolves the reviewed Tag to its exact option ID from the captured schema.
 
 ### Approved Tag taxonomy (content classification only)
 
@@ -153,12 +153,6 @@ Webflow's `data_assets_tool` upload is two steps: (1) `create_asset` gets a pres
 4. Call the fixed create-draft action for the configured collection only.
 5. Read the created item back and verify it is a draft, not archived, and has no publication timestamp.
 6. Reply with the CMS item ID/link and an audit record.
-
-## What we need next
-
-The best input is a read-only collection-schema result from Webflow MCP: collection name, ID, and all field definitions. Do not send tokens or credentials.
-
-If MCP access is not ready, screenshots of the Webflow CMS collection's **Fields** page can help draft a provisional mapping, but they cannot safely replace the schema because they may omit field slugs, required flags, option IDs, reference targets, and validations.
 
 ## Official sources
 

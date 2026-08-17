@@ -71,4 +71,7 @@ test("generates a full transferred Markdown file and one 1920x1080 image using t
   });
   assert.match(preview.initialComment, /1920x1080/);
   assert.match(preview.initialComment, /no Webflow changes made/);
+  assert.equal(preview.webflowImage.filename, "open-models-shift-adoption-blog-image.jpg");
+  assert.equal(preview.webflowImage.file, uploadedImage);
+  assert.equal(preview.webflowImage.mimeType, "image/jpeg");
 });

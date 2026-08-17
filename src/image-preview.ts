@@ -16,6 +16,13 @@ export type GeneratedImagePreview = {
   fileUploads: SlackImageUpload[];
   initialComment: string;
   providerRequestIds: Array<string | null>;
+  /** The same single review asset, retained in memory for a later approved CMS draft. */
+  webflowImage: {
+    altText: string;
+    file: Buffer;
+    filename: string;
+    mimeType: "image/jpeg" | "image/png" | "image/webp";
+  };
 };
 
 const BLOG_IMAGE_WIDTH = 1920;
@@ -63,10 +70,10 @@ function renderDraftMarkdown(proposal: DraftProposal): string {
     `- **Tag:** ${value(proposal.fields.tag)}`,
     "- **Post Summary:** Leave blank. Slackflow does not write a summary that was not supplied.",
     "- **Main Image:** Attached Blog Image (1920x1080 review asset).",
-    "- **Thumbnail Image:** Leave blank until its exact CMS requirement is mapped.",
+    "- **Thumbnail Image:** The same attached Blog Image, if the selected CMS schema validates this image field.",
     "- **Featured?:** Leave at the collection default.",
     "- **Color:** Leave blank.",
-    "- **Writer:** Leave blank unless the selected CMS mapping has a verified default.",
+    "- **Writer:** Datasaur.",
     "- **Writer Profile Image:** Leave blank unless the selected CMS mapping has a verified default.",
     "- **Category:** Leave blank unless it is explicitly supplied or the selected CMS mapping has a verified rule.",
     "- **Slide Show Popup:** Leave blank.",
@@ -121,6 +128,7 @@ export async function generateSlackImagePreview(input: {
   const image = await input.imageProvider.generateImage({ prompt, size: input.imageSize });
   const blogImage = await renderBlogImage(image.base64Data, image.mimeType);
   const stem = filenameStem(proposal.fields.title);
+  const imageFilename = `${stem}-blog-image.${fileExtension(image.mimeType)}`;
 
   return {
     initialComment: `:framed_picture: *Slackflow review files — no Webflow changes made*\n• Full strict-transfer draft (.md)\n• One Blog Image (${BLOG_IMAGE_DIMENSIONS})\nReview both files before any future Webflow draft approval.`,
@@ -134,10 +142,16 @@ export async function generateSlackImagePreview(input: {
       {
         alt_text: `Generated blog image for ${proposal.fields.title}`,
         file: blogImage,
-        filename: `${stem}-blog-image.${fileExtension(image.mimeType)}`,
+        filename: imageFilename,
         title: `${proposal.fields.title} — Blog Image`
       }
     ],
-    providerRequestIds: [image.providerRequestId]
+    providerRequestIds: [image.providerRequestId],
+    webflowImage: {
+      altText: `Generated blog image for ${proposal.fields.title}`,
+      file: blogImage,
+      filename: imageFilename,
+      mimeType: image.mimeType
+    }
   };
 }

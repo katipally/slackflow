@@ -1,4 +1,4 @@
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 import {
   Client,
@@ -13,6 +13,7 @@ import {
 } from "@modelcontextprotocol/client";
 
 import { WebflowConnectionStore } from "./webflow-connection-store.js";
+import type { WebflowDraftContract } from "./webflow-draft.js";
 
 const CONNECTION_SESSION = "connection";
 const PENDING_PREFIX = "pending:";
@@ -39,6 +40,17 @@ export type WebflowToolData = {
   data: unknown;
   text: string;
 };
+
+export type SavedWebflowSchema = {
+  collectionId: string;
+  contract?: WebflowDraftContract;
+  readAt: number;
+  schema: unknown;
+  siteId: string;
+};
+
+export type WebflowAsset = { id: string; url?: string };
+export type WebflowCreatedItem = { id: string; editorUrl?: string; isDraft?: boolean };
 
 /**
  * The hosted Webflow data tools require both an overall context and a label for
@@ -357,10 +369,21 @@ export class WebflowMcpConnection {
     );
   }
 
-  saveSchema(siteId: string, collectionId: string, schema: unknown): void {
+  saveSchema(siteId: string, collectionId: string, schema: unknown, contract?: WebflowDraftContract): void {
     const store = this.requireConnectedStore();
     store.set(CONNECTION_SESSION, "cms_schema", schema);
     store.set(CONNECTION_SESSION, "cms_schema_metadata", { collectionId, readAt: Date.now(), siteId });
+    if (contract) store.set(CONNECTION_SESSION, "cms_draft_contract", contract);
+    else store.remove(CONNECTION_SESSION, "cms_draft_contract");
+  }
+
+  getSavedSchema(): SavedWebflowSchema | undefined {
+    if (!this.store || this.configurationError || this.status().state !== "connected") return undefined;
+    const metadata = this.store.get<{ collectionId?: string; readAt?: number; siteId?: string }>(CONNECTION_SESSION, "cms_schema_metadata");
+    const schema = this.store.get<unknown>(CONNECTION_SESSION, "cms_schema");
+    if (!metadata?.collectionId || !metadata.readAt || !metadata.siteId || schema === undefined) return undefined;
+    const contract = this.store.get<WebflowDraftContract>(CONNECTION_SESSION, "cms_draft_contract");
+    return { collectionId: metadata.collectionId, contract, readAt: metadata.readAt, schema, siteId: metadata.siteId };
   }
 
   schemaStatus(): { state: "not_read" } | { state: "read"; collectionId: string; readAt: number; siteId: string } {
@@ -369,6 +392,53 @@ export class WebflowMcpConnection {
     const metadata = this.store.get<{ collectionId?: string; readAt?: number; siteId?: string }>(CONNECTION_SESSION, "cms_schema_metadata");
     if (!metadata?.collectionId || !metadata.readAt || !metadata.siteId) return { state: "not_read" };
     return { state: "read", collectionId: metadata.collectionId, readAt: metadata.readAt, siteId: metadata.siteId };
+  }
+
+  async uploadImageAsset(input: {
+    file: Buffer;
+    filename: string;
+    mimeType: string;
+    siteId: string;
+  }): Promise<WebflowAsset> {
+    const fileHash = createHash("md5").update(input.file).digest("hex");
+    const result = await this.callTool(
+      "data_assets_tool",
+      createWebflowDataToolRequest(
+        "Slackflow uploads the single user-reviewed blog image for an explicitly approved unpublished CMS draft.",
+        "Create CMS draft image asset",
+        { create_asset: { file_hash: fileHash, file_name: input.filename, site_id: input.siteId } }
+      )
+    );
+    const upload = findAssetUpload(result.data);
+    if (!upload) throw new Error("Webflow did not return an upload target for the approved image asset.");
+
+    const form = new FormData();
+    for (const [key, value] of Object.entries(upload.uploadDetails)) {
+      if (typeof value !== "string" && typeof value !== "number") {
+        throw new Error("Webflow returned an invalid image upload field.");
+      }
+      form.append(key, String(value));
+    }
+    const uploadBytes = new Uint8Array(input.file.byteLength);
+    uploadBytes.set(input.file);
+    form.append("file", new Blob([uploadBytes], { type: input.mimeType }), input.filename);
+    const response = await fetch(upload.uploadUrl, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
+    if (!response.ok) throw new Error(`Webflow image upload failed with status ${response.status}.`);
+    return { id: upload.id, url: upload.url };
+  }
+
+  async createCollectionDraft(input: { collectionId: string; fieldData: Record<string, unknown> }): Promise<WebflowCreatedItem> {
+    const result = await this.callTool(
+      "data_cms_tool",
+      createWebflowDataToolRequest(
+        "Slackflow creates one explicitly approved unpublished CMS draft using the previously validated field mapping.",
+        "Create unpublished CMS draft",
+        { create_collection_items: { collection_id: input.collectionId, request: { fieldData: input.fieldData, isArchived: false, isDraft: true } } }
+      )
+    );
+    const item = findCreatedItem(result.data);
+    if (!item) throw new Error("Webflow did not return the created CMS draft item.");
+    return item;
   }
 
   private createClient(): Client {
@@ -422,9 +492,9 @@ export class WebflowMcpConnection {
     const result = await client.callTool({
       name: "get_more_tools",
       arguments: {
-        brief: `Read-only Slackflow CMS discovery needs ${requiredTool}.`,
+        brief: `Slackflow needs ${requiredTool} for its explicit Webflow CMS workflow.`,
         category: "data",
-        context: "Slackflow only lists sites and reads CMS collection schemas. It does not create, edit, publish, or delete Webflow content."
+        context: "Slackflow lists sites and reads collection schemas. After a user confirms a reviewed proposal, it may upload one image asset and create one unpublished CMS draft. It never publishes or deletes Webflow content."
       }
     });
 
@@ -477,4 +547,63 @@ function parseJson(value: string): unknown {
   } catch {
     return value;
   }
+}
+
+function findAssetUpload(value: unknown): { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string } | undefined {
+  const seen = new Set<unknown>();
+  const visit = (item: unknown): { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string } | undefined => {
+    if (!item || typeof item !== "object" || seen.has(item)) return undefined;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const id = typeof record.id === "string" ? record.id : undefined;
+    const uploadUrl = typeof record.uploadUrl === "string" ? record.uploadUrl : undefined;
+    const uploadDetails = isRecord(record.uploadDetails) ? record.uploadDetails : undefined;
+    if (id && uploadUrl && uploadDetails) {
+      const url = typeof record.hostedUrl === "string" ? record.hostedUrl : typeof record.assetUrl === "string" ? record.assetUrl : undefined;
+      return { id, uploadUrl, uploadDetails, url };
+    }
+    for (const child of Object.values(record)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(value);
+}
+
+function findCreatedItem(value: unknown): WebflowCreatedItem | undefined {
+  const seen = new Set<unknown>();
+  const visit = (item: unknown): WebflowCreatedItem | undefined => {
+    if (!item || typeof item !== "object" || seen.has(item)) return undefined;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    if (typeof record.id === "string" && ("fieldData" in record || "isDraft" in record || "lastUpdated" in record)) {
+      const editorUrl = typeof record.editorUrl === "string" ? record.editorUrl : typeof record.webflowUrl === "string" ? record.webflowUrl : undefined;
+      return { id: record.id, editorUrl, isDraft: typeof record.isDraft === "boolean" ? record.isDraft : undefined };
+    }
+    for (const child of Object.values(record)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

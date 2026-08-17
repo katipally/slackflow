@@ -28,8 +28,10 @@ export function formatProposalPreview(proposal: DraftProposal, messageCount: num
     `• Source URL: ${escapeSlackText(displayValue(proposal.fields.source_url))}`,
     `• Tag: ${escapeSlackText(displayValue(proposal.fields.tag, "Leave blank"))}`,
     "• Main Image: attached 1920x1080 Blog Image",
+    "• Thumbnail Image: same attached Blog Image when the selected schema validates it",
+    "• Writer: Datasaur",
     "*Left blank or collection default*",
-    "• Post Summary, Thumbnail Image, Featured?, Color, Writer, Writer Profile Image, Category, Slide Show Popup, Created On (Inputted)",
+    "• Post Summary, Featured?, Color, Writer Profile Image, Category, Slide Show Popup, Created On (Inputted)",
     "The Markdown file contains the full body and the value for every field above."
   ];
 

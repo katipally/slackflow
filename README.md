@@ -12,7 +12,7 @@ Use it inside a Slack thread:
 
 | Command | Available now | Result |
 | --- | --- | --- |
-| `@slackflow draft` | Yes | Creates the strict-transfer Slack review, Markdown file, and image preview. It does not write to Webflow. |
+| `@slackflow draft` | Yes | Creates the strict-transfer Slack review, Markdown file, and one image. When the selected schema validates the mapping, it also shows an explicit Create Webflow draft button. |
 | `@slackflow help` | Yes | Shows this command set in Slack. |
 | `@slackflow status` | Yes | Shows the current Slackflow and Webflow connection state without exposing secrets. |
 | `@slackflow connect` | Yes, after Render configuration | Sends a private one-time Webflow OAuth link. |
@@ -28,13 +28,15 @@ Only exact compact commands are accepted. For example, `@slackflow create a Webf
 - Transfers article text only from exact Slack source text. It does not invent, rewrite, or improve the article.
 - Posts a review proposal, a Markdown draft file, and one 1920x1080 Blog Image in Slack.
 - Uses `gpt-5.6-luna` through a small provider adapter and `gpt-image-2` for the image preview.
-- Does not create, edit, publish, or otherwise change anything in Webflow.
+- After you choose a site and collection with `@slackflow schema`, validates the exact CMS field types and displays a Create Webflow draft button.
+- A confirmed button click uploads the one reviewed 1920x1080 image and creates one unpublished CMS draft. It never calls a publish, update, or delete action.
+- Uses `Datasaur` as the fixed Writer value for this selected Forge Blog Posts workflow.
 
 If the thread does not contain enough exact source text, Slackflow returns `needs_input` instead of making content up.
 
 ## Webflow MCP status
 
-Slackflow's Webflow OAuth connection has been verified with this Webflow account. `@slackflow schema` can now read a chosen site's collection list and one collection's exact schema. It does not create, edit, publish, or otherwise change Webflow content. The MCP endpoint is:
+`@slackflow schema` reads a chosen site's collection list and one collection's exact schema. It then stores an encrypted executable draft contract: collection ID, schema fingerprint, permitted field slugs/types, verified Tag option IDs, fixed Writer `Datasaur`, allowed blank fields, and image-field rules. The creation button is shown only if the reviewed draft matches that contract, and Slackflow reads the schema again before creating the item. The MCP endpoint is:
 
 ```text
 https://mcp.webflow.com/mcp
@@ -50,7 +52,9 @@ The planned flow is simple:
 
 @slackflow draft
   -> Review the exact transferred draft and image in Slack
-  -> No Webflow CMS action yet
+  -> If the captured schema validates it, review the field values
+  -> Click Create Webflow draft and confirm in Slack
+  -> One unpublished CMS item is created. It is never published.
 
 @slackflow schema
   -> Choose the correct Webflow site and CMS collection
@@ -173,9 +177,9 @@ Render Free has an ephemeral filesystem. The local SQLite run ledger can be lost
 
 Slackflow uses the MCP TypeScript client and Webflow's OAuth server. The local SQLite store encrypts OAuth tokens, dynamic client information, PKCE data, and OAuth discovery state using `WEBFLOW_TOKEN_ENCRYPTION_KEY`. The one-time browser link expires after ten minutes.
 
-Slackflow uses Webflow MCP through deterministic application code, not as unrestricted model tools. The current code can connect and read an exact CMS collection schema. A later create feature will map only fields that exist in that schema and stop if a required field has no valid value.
+Slackflow uses Webflow MCP through deterministic application code, not as unrestricted model tools. It maps only fields that exist in the captured schema and stops if a required field has no valid value.
 
-The future writer will create a CMS item as a draft only and then verify it. It will not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the full technical contract.
+The writer creates a CMS item as a draft only. It does not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the technical contract.
 
 ## Helpful links
 
