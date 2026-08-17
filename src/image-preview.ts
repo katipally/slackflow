@@ -4,6 +4,7 @@ import sharp from "sharp";
 import { loadImagePrompt } from "./images/prompt.js";
 import type { ImageGenerationProvider } from "./images/provider.js";
 import type { DraftProposal } from "./llm/contracts.js";
+import { createExtractivePostSummary } from "./webflow-draft.js";
 
 export type SlackImageUpload = {
   alt_text: string;
@@ -14,7 +15,6 @@ export type SlackImageUpload = {
 
 export type GeneratedImagePreview = {
   fileUploads: SlackImageUpload[];
-  initialComment: string;
   providerRequestIds: Array<string | null>;
   /** The same single review asset, retained in memory for a later approved CMS draft. */
   webflowImage: {
@@ -27,7 +27,6 @@ export type GeneratedImagePreview = {
 
 const BLOG_IMAGE_WIDTH = 1920;
 const BLOG_IMAGE_HEIGHT = 1080;
-const BLOG_IMAGE_DIMENSIONS = `${BLOG_IMAGE_WIDTH}x${BLOG_IMAGE_HEIGHT}`;
 
 function filenameStem(title: string): string {
   const stem = title
@@ -68,7 +67,7 @@ function renderDraftMarkdown(proposal: DraftProposal): string {
     `- **Publication Date:** ${value(proposal.fields.publication_date)}`,
     `- **Source URL:** ${value(proposal.fields.source_url)}`,
     `- **Tag:** ${value(proposal.fields.tag)}`,
-    "- **Post Summary:** Leave blank. Slackflow does not write a summary that was not supplied.",
+    `- **Post Summary:** ${createExtractivePostSummary(proposal.fields.body_markdown)}`,
     "- **Main Image:** Attached Blog Image (1920x1080 review asset).",
     "- **Thumbnail Image:** The same attached Blog Image, if the selected CMS schema validates this image field.",
     "- **Featured?:** Leave at the collection default.",
@@ -131,7 +130,6 @@ export async function generateSlackImagePreview(input: {
   const imageFilename = `${stem}-blog-image.${fileExtension(image.mimeType)}`;
 
   return {
-    initialComment: `:framed_picture: *Slackflow review files — no Webflow changes made*\n• Full strict-transfer draft (.md)\n• One Blog Image (${BLOG_IMAGE_DIMENSIONS})\nReview both files before any future Webflow draft approval.`,
     fileUploads: [
       {
         alt_text: `Full strict-transfer Markdown draft for ${proposal.fields.title}`,

@@ -102,9 +102,9 @@ The supplied Webflow Designer screenshots show these fields. This is a content p
 | Name | Required | Set from the reviewed Slackflow title. |
 | Slug | Required | Generate deterministically from the approved title; check for an existing collision before writing. |
 | Post Body | Rich-text editor UI | Set from the reviewed body after deterministic Markdown-to-safe-HTML conversion. Never repeat the separate title as the first heading. |
-| Post Summary | Blog-grid help text | Leave blank unless the thread explicitly supplies an approved summary. Do not invent a marketing summary. |
-| Main Image | File/image control | Leave blank unless an approved actual image asset (file ID or valid URL plus alt text) is supplied. A visual brief is not an image. |
-| Thumbnail Image | File/image control | Same policy as Main Image. |
+| Post Summary | Blog-grid help text | Fill with a short extractive summary copied from the reviewed post body. Do not write new marketing prose. |
+| Main Image | File/image control | Set to the one reviewed Slackflow image after the user explicitly confirms creation. A visual brief alone is not an image. |
+| Thumbnail Image | File/image control | Set to the same approved image only when the captured schema validates the field. |
 | Featured? | Toggle | Leave at the Webflow default unless the thread explicitly says to feature the post. |
 | Color | Color input | Leave blank unless a valid color value is supplied. |
 | Writer | Required text-like control | Set to the approved fixed value `Datasaur`. Never infer it from the Slack author. |

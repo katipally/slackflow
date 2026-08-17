@@ -248,14 +248,9 @@ function webflowConnectedBlocks() {
 }
 
 function webflowDraftApprovalBlocks(input: { draftId: string; mapping: WebflowDraftMapping }) {
-  const values = input.mapping.filledFields.map((field) => `• *${field.label}:* ${field.value}`).join("\n");
-  const imageFields = input.mapping.imageFieldSlugs.length > 0
-    ? "• *Main Image and Thumbnail image:* the one attached 1920x1080 Blog Image"
-    : "• *Blog Image:* attached for review only. The selected schema has no mapped image fields.";
   return [
     { type: "header" as const, text: { type: "plain_text" as const, text: "Create Webflow draft?", emoji: true } },
-    { type: "section" as const, text: { type: "mrkdwn" as const, text: `${values}\n${imageFields}\n\nAll other CMS fields stay blank or at their collection default.` } },
-    { type: "section" as const, text: { type: "mrkdwn" as const, text: "This uploads one image asset if needed and creates one *unpublished* CMS draft. It never publishes the item." } },
+    { type: "section" as const, text: { type: "mrkdwn" as const, text: "Review the attached Markdown and Blog Image. This creates one *unpublished* CMS draft and never publishes it." } },
     {
       type: "actions" as const,
       elements: [{
@@ -493,12 +488,6 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
 
     const participantCount = new Set(transcript.messages.map((message) => message.authorId)).size;
 
-    await client.chat.postMessage({
-      channel: event.channel,
-      text: `:hourglass_flowing_sand: Reading ${transcript.messages.length} source messages and preparing a strict-transfer draft plus one Blog Image preview…`,
-      thread_ts: rootTs
-    });
-
     const extraction = await draftModelProvider.generateDraftProposal({ transcript });
 
     const previewText = formatProposalPreview(extraction.proposal, transcript.messages.length);
@@ -510,12 +499,6 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
     }
 
     runStore.mark(body.event_id, "draft_ready");
-
-    await client.chat.postMessage({
-      channel: event.channel,
-      text: ":art: Strict-transfer proposal is ready. Generating its one Slack-only Blog Image preview…",
-      thread_ts: rootTs
-    });
 
     try {
       const imagePreview = await generateSlackImagePreview({
@@ -529,7 +512,6 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
         await client.filesUploadV2({
           channel_id: event.channel,
           file_uploads: imagePreview.fileUploads,
-          initial_comment: `${previewText}\n\n${imagePreview.initialComment}`,
           thread_ts: rootTs
         });
       } catch (error) {
@@ -537,7 +519,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
         logger.error(error, "Generated Slackflow review files but could not upload them to Slack");
         await client.chat.postMessage({
           channel: event.channel,
-          text: `${previewText}\n\n:warning: The strict-transfer draft is ready, but its review files could not be uploaded to Slack. No Webflow changes were made. Check the local terminal for the error details.`,
+          text: ":warning: Slackflow created the reviewed draft but could not upload its Markdown and image to Slack. No Webflow changes were made. Check the service logs for details.",
           thread_ts: rootTs
         });
         return;
@@ -560,7 +542,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
           await client.chat.postMessage({
             blocks: webflowDraftApprovalBlocks({ draftId, mapping }),
             channel: event.channel,
-            text: "Review the validated Webflow field values, then choose Create Webflow draft to create an unpublished CMS item.",
+            text: "Review the attached Markdown and image, then choose Create Webflow draft.",
             thread_ts: rootTs
           });
         } catch (error) {
@@ -590,7 +572,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
       logger.error(error, "Failed to generate the Slackflow image preview");
       await client.chat.postMessage({
         channel: event.channel,
-        text: `${previewText}\n\n:warning: The strict-transfer draft is ready, but Slackflow could not generate its Blog Image. No Webflow changes were made. Check the local terminal for the error details.`,
+        text: ":warning: Slackflow could not generate the reviewed Blog Image, so no Webflow draft can be created. Check the service logs for details.",
         thread_ts: rootTs
       });
       return;

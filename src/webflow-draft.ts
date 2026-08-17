@@ -7,7 +7,6 @@ export const DEFAULT_WEBFLOW_WRITER = "Datasaur";
 export type WebflowDraftMapping = {
   collectionId: string;
   fieldData: Record<string, unknown>;
-  filledFields: Array<{ label: string; value: string }>;
   imageFieldSlugs: string[];
   schemaFingerprint: string;
 };
@@ -19,6 +18,7 @@ export type WebflowDraftContract = {
   collectionId: string;
   imageFieldSlugs: string[];
   schemaFingerprint: string;
+  summary?: { slug: string; type: string };
   tag: { optionIds: Partial<Record<WebflowTag, string>>; slug: string };
   version: 1;
   writer: { slug: string; value: typeof DEFAULT_WEBFLOW_WRITER };
@@ -151,6 +151,22 @@ export function slugFromTitle(title: string): string {
   return slug;
 }
 
+/**
+ * An extractive CMS summary. It only copies the opening source sentence(s),
+ * so Slackflow never invents a summary that was not in the reviewed body.
+ */
+export function createExtractivePostSummary(body: string): string {
+  const source = body.replace(/\s+/g, " ").trim();
+  if (!source) throw new Error("Cannot create a post summary without a reviewed post body.");
+
+  const sentences = source.match(/[^.!?]+[.!?]+(?:\s|$)/g) ?? [];
+  const candidate = sentences.slice(0, 2).join("").trim() || source;
+  if (candidate.length <= 320) return candidate;
+
+  const shortened = candidate.slice(0, 320);
+  return shortened.slice(0, Math.max(shortened.lastIndexOf(" "), 1)).trim();
+}
+
 /** Builds a fixed contract and stops whenever the selected collection is not safe to write. */
 export function createWebflowDraftContract(input: {
   collectionId: string;
@@ -160,18 +176,20 @@ export function createWebflowDraftContract(input: {
   const fields = extractSchemaFields(schema);
   if (fields.length === 0) throw new Error("Slackflow could not validate fields from the captured CMS schema.");
   const bodyField = requireField(fields, "Post Body");
+  const summaryField = findField(fields, "Post Summary");
   const writerField = requireField(fields, "Writer");
   const tagField = requireField(fields, "Tag");
   const mainImageField = findField(fields, "Main Image");
   const thumbnailImageField = findField(fields, "Thumbnail Image");
   requireOneOf(bodyField, ["RichText", "PlainText"], "Post Body");
+  if (summaryField) requireOneOf(summaryField, ["PlainText"], "Post Summary");
   requireOneOf(writerField, ["PlainText"], "Writer");
   requireOneOf(tagField, ["Option"], "Tag");
   for (const field of [mainImageField, thumbnailImageField]) {
     if (field) requireOneOf(field, ["Image", "ImageRef"], field.displayName);
   }
 
-  const knownRequired = new Set(["postbody", "writer", "tag", "mainimage", "thumbnailimage", "name", "slug"]);
+  const knownRequired = new Set(["postbody", "postsummary", "writer", "tag", "mainimage", "thumbnailimage", "name", "slug"]);
   const unexpectedRequired = fields.filter((field) => field.isRequired && !knownRequired.has(normalize(field.displayName)) && !knownRequired.has(normalize(field.slug)));
   if (unexpectedRequired.length > 0) {
     throw new Error(`The selected CMS schema has required field(s) Slackflow will not guess: ${unexpectedRequired.map((field) => field.displayName).join(", ")}.`);
@@ -186,11 +204,12 @@ export function createWebflowDraftContract(input: {
   if (Object.keys(optionIds).length === 0) throw new Error("The selected CMS Tag field has none of Slackflow's verified tag options.");
 
   return {
-    approvedBlankFields: ["Post Summary", "Featured?", "Color", "Writer Profile Image", "Category", "Slide Show Popup", "Created On (Inputted)"],
+    approvedBlankFields: ["Featured?", "Color", "Writer Profile Image", "Category", "Slide Show Popup", "Created On (Inputted)"],
     body: { slug: bodyField.slug, type: bodyField.type },
     collectionId,
     imageFieldSlugs: [mainImageField, thumbnailImageField].flatMap((field) => field ? [field.slug] : []),
     schemaFingerprint: schemaFingerprint(schema),
+    summary: summaryField ? { slug: summaryField.slug, type: summaryField.type } : undefined,
     tag: { optionIds, slug: tagField.slug },
     version: 1,
     writer: { slug: writerField.slug, value: DEFAULT_WEBFLOW_WRITER }
@@ -218,22 +237,17 @@ export function createWebflowDraftMapping(input: {
 
   const slug = slugFromTitle(title);
   const bodyValue = normalize(contract.body.type) === normalize("RichText") ? markdownToWebflowHtml(body) : body;
+  const summary = contract.summary ? createExtractivePostSummary(body) : undefined;
   return {
     collectionId: contract.collectionId,
     fieldData: {
       name: title,
       slug,
       [contract.body.slug]: bodyValue,
+      ...(contract.summary ? { [contract.summary.slug]: summary } : {}),
       [contract.writer.slug]: contract.writer.value,
       [contract.tag.slug]: tagOptionId
     },
-    filledFields: [
-      { label: "Name", value: title },
-      { label: "Slug", value: slug },
-      { label: "Post Body", value: "Attached strict-transfer Markdown body" },
-      { label: "Writer", value: DEFAULT_WEBFLOW_WRITER },
-      { label: "Tag", value: tag }
-    ],
     imageFieldSlugs: contract.imageFieldSlugs,
     schemaFingerprint: contract.schemaFingerprint
   };

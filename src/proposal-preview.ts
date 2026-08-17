@@ -1,4 +1,5 @@
 import type { DraftProposal } from "./llm/contracts.js";
+import { createExtractivePostSummary } from "./webflow-draft.js";
 
 function escapeSlackText(value: string): string {
   return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -27,11 +28,12 @@ export function formatProposalPreview(proposal: DraftProposal, messageCount: num
     `• Publication Date: ${escapeSlackText(displayValue(proposal.fields.publication_date))}`,
     `• Source URL: ${escapeSlackText(displayValue(proposal.fields.source_url))}`,
     `• Tag: ${escapeSlackText(displayValue(proposal.fields.tag, "Leave blank"))}`,
+    `• Post Summary: ${proposal.fields.body_markdown ? escapeSlackText(createExtractivePostSummary(proposal.fields.body_markdown)) : "Not available"}`,
     "• Main Image: attached 1920x1080 Blog Image",
     "• Thumbnail Image: same attached Blog Image when the selected schema validates it",
     "• Writer: Datasaur",
     "*Left blank or collection default*",
-    "• Post Summary, Featured?, Color, Writer Profile Image, Category, Slide Show Popup, Created On (Inputted)",
+    "• Featured?, Color, Writer Profile Image, Category, Slide Show Popup, Created On (Inputted)",
     "The Markdown file contains the full body and the value for every field above."
   ];
 

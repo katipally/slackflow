@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyWebflowImageToDraft, assertSchemaMatchesContract, createWebflowDraftContract, createWebflowDraftMapping, markdownToWebflowHtml } from "./webflow-draft.js";
+import { applyWebflowImageToDraft, assertSchemaMatchesContract, createExtractivePostSummary, createWebflowDraftContract, createWebflowDraftMapping, markdownToWebflowHtml } from "./webflow-draft.js";
 import type { DraftProposal } from "./llm/contracts.js";
 
 const proposal = {
@@ -12,6 +12,7 @@ const proposal = {
 const schema = {
   fields: [
     { displayName: "Post Body", slug: "post-body", type: "RichText", isRequired: false },
+    { displayName: "Post Summary", slug: "post-summary", type: "PlainText", isRequired: false },
     { displayName: "Main Image", slug: "main-image", type: "Image", isRequired: false },
     { displayName: "Thumbnail image", slug: "thumbnail-image", type: "Image", isRequired: false },
     { displayName: "Writer", slug: "writer", type: "PlainText", isRequired: true },
@@ -26,6 +27,7 @@ test("maps only the fixed verified Forge Blog Post fields and fixes Writer to Da
     name: "A title",
     slug: "a-title",
     "post-body": "<p>Line one.<br>Line two.</p>",
+    "post-summary": "Line one. Line two.",
     writer: "Datasaur",
     tag: "ai"
   });
@@ -50,4 +52,8 @@ test("blocks a changed collection schema after the contract is captured", () => 
 
 test("HTML conversion preserves source text without writing new prose", () => {
   assert.equal(markdownToWebflowHtml("A & B\n<literal>"), "<p>A &amp; B<br>&lt;literal&gt;</p>");
+});
+
+test("extractive post summary copies only text from the reviewed body", () => {
+  assert.equal(createExtractivePostSummary("First source sentence. Second source sentence. Third source sentence."), "First source sentence. Second source sentence.");
 });

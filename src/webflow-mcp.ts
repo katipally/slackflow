@@ -412,18 +412,12 @@ export class WebflowMcpConnection {
     const upload = findAssetUpload(result.data);
     if (!upload) throw new Error("Webflow did not return an upload target for the approved image asset.");
 
-    const form = new FormData();
-    for (const [key, value] of Object.entries(upload.uploadDetails)) {
-      if (typeof value !== "string" && typeof value !== "number") {
-        throw new Error("Webflow returned an invalid image upload field.");
-      }
-      form.append(key, String(value));
+    if (input.file.byteLength > 4 * 1024 * 1024) {
+      throw new Error("The reviewed Blog Image is larger than Webflow's 4 MB asset-upload limit.");
     }
-    const uploadBytes = new Uint8Array(input.file.byteLength);
-    uploadBytes.set(input.file);
-    form.append("file", new Blob([uploadBytes], { type: input.mimeType }), input.filename);
-    const response = await fetch(upload.uploadUrl, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
-    if (!response.ok) throw new Error(`Webflow image upload failed with status ${response.status}.`);
+
+    const response = await uploadWebflowAsset(upload, input);
+    if (!response.ok) throw new Error(await webflowUploadError(response));
     return { id: upload.id, url: upload.url };
   }
 
@@ -549,9 +543,44 @@ function parseJson(value: string): unknown {
   }
 }
 
-function findAssetUpload(value: unknown): { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string } | undefined {
+type AssetUploadTarget = { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string };
+
+async function uploadWebflowAsset(target: AssetUploadTarget, input: { file: Buffer; filename: string; mimeType: string }): Promise<Response> {
+  const entries = Object.entries(target.uploadDetails);
+  if (entries.some(([, value]) => typeof value !== "string" && typeof value !== "number")) {
+    throw new Error("Webflow returned an invalid image upload field.");
+  }
+
+  const uploadBytes = new Uint8Array(input.file.byteLength);
+  uploadBytes.set(input.file);
+  const contentType = typeof target.uploadDetails["content-type"] === "string" ? target.uploadDetails["content-type"] : input.mimeType;
+
+  // Webflow returns an S3 POST policy when it includes Policy. The form fields
+  // must be sent unchanged and the file must be the final multipart field.
+  if ("Policy" in target.uploadDetails || "policy" in target.uploadDetails) {
+    const form = new FormData();
+    for (const [key, value] of entries) form.append(key, String(value));
+    form.append("file", new Blob([uploadBytes], { type: contentType }), input.filename);
+    return fetch(target.uploadUrl, { method: "POST", body: form, signal: AbortSignal.timeout(120_000) });
+  }
+
+  // This supports a future Webflow upload target that uses signed PUT headers.
+  const headers = new Headers(entries.map(([key, value]) => [key, String(value)]));
+  if (!headers.has("content-type")) headers.set("content-type", contentType);
+  return fetch(target.uploadUrl, { method: "PUT", headers, body: uploadBytes, signal: AbortSignal.timeout(120_000) });
+}
+
+async function webflowUploadError(response: Response): Promise<string> {
+  const body = await response.text().catch(() => "");
+  const code = body.match(/<Code>([^<]+)<\/Code>/i)?.[1];
+  const requestId = body.match(/<RequestId>([^<]+)<\/RequestId>/i)?.[1];
+  const suffix = [code, requestId ? `request ${requestId}` : undefined].filter(Boolean).join(", ");
+  return `Webflow image upload failed with status ${response.status}${suffix ? ` (${suffix})` : ""}.`;
+}
+
+function findAssetUpload(value: unknown): AssetUploadTarget | undefined {
   const seen = new Set<unknown>();
-  const visit = (item: unknown): { id: string; uploadUrl: string; uploadDetails: Record<string, unknown>; url?: string } | undefined => {
+  const visit = (item: unknown): AssetUploadTarget | undefined => {
     if (!item || typeof item !== "object" || seen.has(item)) return undefined;
     seen.add(item);
     if (Array.isArray(item)) {
