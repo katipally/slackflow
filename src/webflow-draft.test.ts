@@ -60,17 +60,31 @@ test("maps provided date and source fields only when the selected schema exposes
   assert.equal(contract.approvedBlankFields.includes("Created On (Inputted)"), false);
 });
 
-test("does not invent a time for a Date/Time CMS field", () => {
+test("leaves an optional Date/Time field blank when the source has only a date", () => {
   const contract = createWebflowDraftContract({
     collectionId: "collection",
     schema: {
       fields: [...schema.fields, { displayName: "Publication Date", slug: "publication-date", type: "Date/Time", isRequired: false }]
     }
   });
+  const mapping = createWebflowDraftMapping({
+    contract,
+    proposal: { ...proposal, fields: { ...proposal.fields, publication_date: "2026-08-15" } } as DraftProposal
+  });
+  assert.equal(Object.hasOwn(mapping.fieldData, "publication-date"), false);
+});
+
+test("blocks a date-only source for a required Date/Time CMS field", () => {
+  const contract = createWebflowDraftContract({
+    collectionId: "collection",
+    schema: {
+      fields: [...schema.fields, { displayName: "Publication Date", slug: "publication-date", type: "Date/Time", isRequired: true }]
+    }
+  });
   assert.throws(() => createWebflowDraftMapping({
     contract,
     proposal: { ...proposal, fields: { ...proposal.fields, publication_date: "2026-08-15" } } as DraftProposal
-  }), /will not invent a time/);
+  }), /required Webflow Date\/Time field/);
 });
 
 test("blocks a non-URL source value for a Webflow Link field", () => {

@@ -130,7 +130,7 @@ function requireOneOf(field: SchemaField, allowed: string[], label: string): voi
   }
 }
 
-function validatePublicationDate(field: { type: string }, value: string | null): string | undefined {
+function validatePublicationDate(field: { isRequired: boolean; type: string }, value: string | null): string | undefined {
   const source = text(value);
   if (!source) return undefined;
   const type = normalize(field.type);
@@ -139,7 +139,8 @@ function validatePublicationDate(field: { type: string }, value: string | null):
   if ((type === normalize("Date/Time") || type === normalize("DateTime")) && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/.test(source) && !Number.isNaN(Date.parse(source))) {
     return source;
   }
-  throw new Error(`The reviewed publication date is not valid for the Webflow ${field.type} field. Slackflow will not invent a time or transform the source value.`);
+  if (!field.isRequired) return undefined;
+  throw new Error(`The reviewed publication date is not valid for the required Webflow ${field.type} field. Slackflow will not invent a time or transform the source value.`);
 }
 
 function validateSourceUrl(field: { type: string }, value: string | null): string | undefined {
