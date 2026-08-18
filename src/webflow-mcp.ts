@@ -65,6 +65,18 @@ export function createWebflowDataToolRequest(
   return { actions: [{ label, ...action }], context };
 }
 
+/**
+ * Webflow MCP creates CMS items in bulk, even when Slackflow intentionally
+ * creates only one approved draft. The tool therefore requires fieldData to
+ * be an array containing the one item, rather than a single field-data object.
+ */
+export function createWebflowCollectionDraftAction(
+  collectionId: string,
+  fieldData: Record<string, unknown>
+): Record<string, unknown> {
+  return { create_collection_items: { collection_id: collectionId, request: { fieldData: [fieldData] } } };
+}
+
 type PendingConnection = {
   client: Client;
   provider: WebflowOAuthProvider;
@@ -445,7 +457,7 @@ export class WebflowMcpConnection {
       createWebflowDataToolRequest(
         "Slackflow creates one explicitly approved unpublished CMS draft using the previously validated field mapping.",
         "Create unpublished CMS draft",
-        { create_collection_items: { collection_id: input.collectionId, request: { fieldData: input.fieldData } } }
+        createWebflowCollectionDraftAction(input.collectionId, input.fieldData)
       )
     );
     const item = findCreatedItem(result.data);

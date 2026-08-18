@@ -204,6 +204,10 @@ function safeWebflowReadError(error: unknown): string {
     .replace(/https?:\/\/\S+/g, "[URL redacted]")
     .slice(0, 350);
 
+  if (/create_collection_items/i.test(safeMessage) && /expected.*array/i.test(safeMessage)) {
+    return "Webflow MCP rejected the CMS draft payload. Deploy the current Slackflow update, then retry the same approval once.";
+  }
+
   if (/path.*actions|expected.*array|received.*undefined/i.test(safeMessage)) {
     return "Webflow MCP rejected the site-discovery request. Deploy the current Slackflow update, then retry the command.";
   }

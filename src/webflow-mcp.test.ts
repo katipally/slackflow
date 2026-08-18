@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createWebflowDataToolRequest, WebflowMcpConnection, webflowS3FieldName } from "./webflow-mcp.js";
+import {
+  createWebflowCollectionDraftAction,
+  createWebflowDataToolRequest,
+  WebflowMcpConnection,
+  webflowS3FieldName
+} from "./webflow-mcp.js";
 
 const encryptionKey = Buffer.alloc(32, 9).toString("base64");
 
@@ -22,6 +27,15 @@ test("normalizes MCP camelCase asset fields to the exact S3 signed field names",
   assert.equal(webflowS3FieldName("xAmzAlgorithm"), "X-Amz-Algorithm");
   assert.equal(webflowS3FieldName("X-Amz-Signature"), "X-Amz-Signature");
   assert.equal(webflowS3FieldName("acl"), "acl");
+});
+
+test("creates exactly one CMS draft in the MCP bulk fieldData array", () => {
+  assert.deepEqual(createWebflowCollectionDraftAction("collection-1", { name: "New draft", slug: "new-draft" }), {
+    create_collection_items: {
+      collection_id: "collection-1",
+      request: { fieldData: [{ name: "New draft", slug: "new-draft" }] }
+    }
+  });
 });
 
 test("requires a complete secure configuration before creating a Webflow OAuth link", () => {
