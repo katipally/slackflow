@@ -1,99 +1,96 @@
 # Slackflow
 
-Slackflow reads the full context of a Slack thread and prepares a blog draft for review.
+Slackflow is a Slack bot that turns the complete context of an invoked thread into a reviewed Webflow CMS draft. It uses strict transfer: article text must come from exact text selected from Slack. It does not invent, rewrite, or improve the blog post.
 
-Use it inside a Slack thread:
+The normal workflow is:
 
-```text
-@slackflow draft
-```
+1. Connect Webflow once.
+2. Choose a Webflow site and CMS collection once.
+3. In any source thread, run `@slackflow draft`.
+4. Review the generated Markdown, thumbnail, and banner in the same Slack thread.
+5. Click **Create Webflow draft** to create one unpublished CMS item.
+
+Slackflow never calls a publish, update, or delete action.
 
 ## Commands
 
-| Command | Available now | Result |
+| Command | When to use it | What it does |
 | --- | --- | --- |
-| `@slackflow draft` | Yes | Creates the strict-transfer Slack review, Markdown file, and one image. When the selected schema validates the mapping, it also shows an explicit Create Webflow draft button. |
-| `@slackflow help` | Yes | Shows this command set in Slack. |
-| `@slackflow status` | Yes | Shows the current Slackflow and Webflow connection state without exposing secrets. |
-| `@slackflow connect` | Yes, after Render configuration | Sends a private one-time Webflow OAuth link. |
-| `@slackflow schema` | Yes, after Webflow connection | Lets you choose a Webflow site and CMS collection, then reads its schema only. |
-| `@slackflow disconnect` | Yes | Removes Slackflow's encrypted local Webflow connection. It does not revoke the OAuth grant in Webflow. |
+| `@slackflow connect` | First setup or after lost storage | Sends a private one-time Webflow OAuth link. |
+| `@slackflow schema` | First setup or changing target site or collection | Lets you choose a Webflow site and collection, then reads its exact fields and validation rules. |
+| `@slackflow draft` | Regular workflow, in a source thread | Reads the thread, creates review files, and shows **Create Webflow draft** when the selected CMS contract validates. |
+| `@slackflow status` | Troubleshooting | Shows connection and readiness state without exposing secrets. |
+| `@slackflow disconnect` | Replacing or removing the Webflow connection | Removes Slackflow's locally encrypted OAuth connection. It does not revoke the grant in Webflow. |
+| `@slackflow help` | Any time | Shows the command list in Slack. |
 
-Only exact compact commands are accepted. For example, `@slackflow create a Webflow draft` does not trigger any action.
+Use only these compact commands. For example, `@slackflow create a Webflow draft` is intentionally ignored.
 
-## What works today
+## What `draft` does
 
-- Reads the root message and replies posted before the command from every participant.
-- Removes the command and Slackflow's own messages from the source.
-- Transfers article text only from exact Slack source text. It does not invent, rewrite, or improve the article.
-- Posts a review proposal, a Markdown draft file, and one 1920x1080 Blog Image in Slack.
-- Uses `gpt-5.6-luna` through a small provider adapter and `gpt-image-2` for the image preview.
-- After you choose a site and collection with `@slackflow schema`, validates the exact CMS field types and displays a Create Webflow draft button.
-- A confirmed button click uploads the one reviewed 1920x1080 image and creates one unpublished CMS draft. It never calls a publish, update, or delete action.
-- Uses `Datasaur` as the fixed Writer value for this selected Forge Blog Posts workflow.
+Slackflow reads the root message and replies posted before the command. It excludes the command itself, Slackflow messages, and later thread messages.
 
-If the thread does not contain enough exact source text, Slackflow returns `needs_input` instead of making content up.
+The text-model adapter selects exact source passages. Slackflow then applies deterministic safeguards:
 
-## Webflow MCP status
+- Outer Markdown wrappers on a title, such as `_Title_` or `*Title*`, become plain title text.
+- A trailing assistant menu beginning with `If you want, I can also:` is excluded from the post body.
+- Headings are preserved when the source supplies an unambiguous heading signal.
+- Missing source data stays missing. Slackflow does not fabricate it.
 
-`@slackflow schema` reads a chosen site's collection list and one collection's exact schema. It then stores an encrypted executable draft contract: collection ID, schema fingerprint, permitted field slugs/types, verified Tag option IDs, fixed Writer `Datasaur`, allowed blank fields, and image-field rules. The creation button is shown only if the reviewed draft matches that contract, and Slackflow reads the schema again before creating the item. The MCP endpoint is:
+For a valid review, it uploads these files to Slack:
 
-```text
-https://mcp.webflow.com/mcp
-```
+- A Markdown file containing the full draft and CMS field values.
+- A 1920x1080 thumbnail image.
+- A 1920x640 banner image derived from the same reviewed image.
 
-The planned flow is simple:
+On confirmation, Slackflow creates one new unpublished CMS item, fills only validated fields, assigns Writer to `Datasaur`, and uses verified Tag and Category values. The banner goes to Main Image and the 1920x1080 file goes to Thumbnail Image for the selected Forge Blog Posts workflow.
 
-```text
-@slackflow connect
-  -> Receive a private one-time link in Slack
-  -> Complete Webflow OAuth in the browser
-  -> Run @slackflow status to confirm the local connection
+## Requirements
 
-@slackflow draft
-  -> Review the exact transferred draft and image in Slack
-  -> If the captured schema validates it, review the field values
-  -> Click Create Webflow draft and confirm in Slack
-  -> One unpublished CMS item is created. It is never published.
-
-@slackflow schema
-  -> Choose the correct Webflow site and CMS collection
-  -> Read its real fields, types, and validation rules
-  -> No Webflow CMS action yet
-```
-
-There is no individual approver allowlist for this demo. When this flow is built, anyone in the Slack workspace who can use the bot can start it. The create action will still require an explicit Slack confirmation and will create a draft only. It will never publish automatically.
+- Node.js 22.13 or newer.
+- A Slack workspace where you can create and install an app.
+- An OpenAI API key for the configured text and image providers.
+- A Webflow account with access to the target site and CMS collection.
+- A publicly reachable HTTPS origin for Webflow OAuth in production.
 
 ## Local setup
 
-Requirements: Node 22.13 or newer and a Slack workspace where you can create an app.
+1. Clone the repository and enter it.
 
-1. Copy `.env.example` to `.env`.
-2. Set the Slack credentials and OpenAI API key in `.env`. Never commit or share that file.
-3. Install and check the project:
+   ```bash
+   git clone https://github.com/katipally/slackflow.git
+   cd slackflow
+   ```
+
+2. Copy the environment template and fill in values.
+
+   ```bash
+   cp .env.example .env
+   ```
+
+3. Install, verify, and run the bot.
 
    ```bash
    npm install
    npm run check
    npm test
-   ```
-
-4. Start the bot:
-
-   ```bash
+   npm run build
    npm run dev
    ```
 
-5. In a test channel, create a message with replies, then post `@slackflow draft` as a reply in that thread.
+4. Invite the bot to a test channel, create a thread with source content, and post `@slackflow draft` as a reply in that thread.
 
-### Required environment values
+For a local bot test, the Slack app can use Socket Mode. Webflow OAuth still needs a public HTTPS `PUBLIC_BASE_URL`, so use the deployed service for `connect` and `schema`.
+
+### Environment values
+
+Copy every value from `.env.example`. The important production values are:
 
 ```text
 SLACK_SIGNING_SECRET=
 SLACK_BOT_TOKEN=
 SLACK_APP_TOKEN=
-OPENAI_API_KEY=
 
+OPENAI_API_KEY=
 LLM_PROVIDER=openai
 LLM_MODEL=gpt-5.6-luna
 LLM_REASONING_EFFORT=medium
@@ -104,18 +101,32 @@ IMAGE_BLOG_SIZE=1536x1024
 IMAGE_QUALITY=medium
 IMAGE_OUTPUT_FORMAT=jpeg
 
-PUBLIC_BASE_URL=https://slackflow-demo.onrender.com
+PUBLIC_BASE_URL=https://your-service.example.com
 WEBFLOW_MCP_URL=https://mcp.webflow.com/mcp
 WEBFLOW_TOKEN_ENCRYPTION_KEY=
+SLACKFLOW_STATE_PATH=.slackflow/state.sqlite
 ```
 
-The image model creates a 1536x1024 source image. Slackflow places it without cropping on a black 1920x1080 canvas before uploading it to Slack.
+Generate `WEBFLOW_TOKEN_ENCRYPTION_KEY` once, keep it secret, and do not rotate it while you need existing local OAuth connections:
+
+```bash
+openssl rand -base64 32
+```
+
+Do not commit `.env`, OAuth tokens, Slack tokens, or this encryption key.
 
 ## Slack app setup
 
-1. Create a Slack app from scratch in your workspace.
-2. Turn on **Socket Mode** and create an app-level token with the `connections:write` scope. Put it in `SLACK_APP_TOKEN`.
-3. Under **OAuth & Permissions**, add these bot token scopes:
+1. Go to [Slack API Apps](https://api.slack.com/apps) and create an app from scratch in the target workspace.
+2. Open **Socket Mode**, enable it, and create an app-level token with this scope:
+
+   ```text
+   connections:write
+   ```
+
+   Put that token in `SLACK_APP_TOKEN`.
+
+3. Open **OAuth & Permissions** and add these Bot Token Scopes:
 
    ```text
    app_mentions:read
@@ -125,18 +136,66 @@ The image model creates a 1536x1024 source image. Slackflow places it without cr
    files:write
    ```
 
-4. Under **Event Subscriptions**, subscribe to the `app_mention` bot event.
-5. Install the app to the workspace. Copy the bot token to `SLACK_BOT_TOKEN` and the signing secret to `SLACK_SIGNING_SECRET`.
-6. Invite the bot to each test channel. It must be invited to private channels before it can read their threads.
+4. Open **Event Subscriptions** and subscribe to the bot event:
 
-Socket Mode means Slackflow does not need a public Slack Events URL. It opens an outbound connection to Slack.
+   ```text
+   app_mention
+   ```
 
-## Deploy on Render without Docker
+5. Install or reinstall the app to the workspace. Copy the Bot User OAuth Token to `SLACK_BOT_TOKEN` and the signing secret to `SLACK_SIGNING_SECRET`.
+6. Invite the bot to every channel it should read. For private channels, it must be invited before it can access thread history.
 
-This repository is deployed as a Node web service from the `main` branch of [katipally/slackflow](https://github.com/katipally/slackflow). No Docker setup is required.
+Socket Mode uses an outbound connection to Slack, so Slack does not need a public Events Request URL.
 
-1. In Render, create a **Web Service** from the GitHub repository.
-2. Choose the Node runtime and the `main` branch.
+If you add or change a Slack scope, reinstall the app before testing it.
+
+## First Webflow setup
+
+Do this in any Slack thread after the backend is deployed and `PUBLIC_BASE_URL` is correct.
+
+1. Run `@slackflow connect`.
+2. Open the private **Connect Webflow** link and approve Webflow OAuth.
+3. Return to the same Slack thread. Slackflow edits its connection message to confirm success.
+4. Run `@slackflow schema`.
+5. Choose the target Webflow site.
+6. Choose the target CMS collection, for example **Forge Blog Posts**.
+
+This is read-only. Slackflow captures the selected collection's real fields, field types, required rules, valid Tag option IDs, and a schema fingerprint. It creates a draft contract from that information. No CMS item is created during `connect` or `schema`.
+
+When the collection changes, run `@slackflow schema` again and choose the new target.
+
+## Regular use
+
+1. Place the source blog content in a Slack thread. Multiple people and multiple replies are supported.
+2. Post `@slackflow draft` as a reply in that thread.
+3. Read the attached Markdown and inspect the thumbnail and banner.
+4. If they are correct, click **Create Webflow draft** in the same thread.
+5. Slackflow creates a new unpublished CMS item and replies with the result. Open the returned Webflow link to review it.
+
+Do not use the same button repeatedly. If a request times out, check Webflow for the new item before retrying to avoid creating duplicates.
+
+## Hosting the agent backend
+
+Slackflow is a long-running agent backend, not a static website. The host needs:
+
+- A persistent Node process for Slack Socket Mode.
+- A public HTTPS origin for Webflow OAuth redirects.
+- Secret environment variables.
+- A writable state path if you want OAuth connections and duplicate-delivery records to survive restarts.
+
+It exposes these health endpoints:
+
+```text
+GET /
+GET /healthz
+```
+
+### Render example, without Docker
+
+This repository can run as a Render Node Web Service.
+
+1. Create a **Web Service** from the GitHub repository and select the `main` branch.
+2. Choose the Node runtime.
 3. Set the build command:
 
    ```text
@@ -149,42 +208,56 @@ This repository is deployed as a Node web service from the `main` branch of [kat
    npm start
    ```
 
-5. Add the same secret environment values listed above in Render's Environment page. Set `PUBLIC_BASE_URL` to `https://slackflow-demo.onrender.com`. Generate `WEBFLOW_TOKEN_ENCRYPTION_KEY` with `openssl rand -base64 32` and store its output only in Render. Do not add `.env` or this key to Git.
-6. Deploy. Render provides `PORT`; Slackflow listens on it and exposes these checks:
+5. Add the environment values above in Render's Environment page. Set `PUBLIC_BASE_URL` to the exact Render HTTPS origin, for example `https://your-service.onrender.com`.
+6. Deploy and check the logs for `Slackflow is running in Socket Mode`.
+7. Use `https://your-service.onrender.com/healthz` for a health check.
 
-   ```text
-   GET /
-   GET /healthz
-   ```
+Render provides `PORT` automatically and Slackflow uses it. No Dockerfile is required.
 
-7. Check the Render logs for the Socket Mode connection, then run `@slackflow draft` in the Slack test thread.
+### Storage and free hosts
 
-The current Render URL is `https://slackflow-demo.onrender.com/`.
+Slackflow stores an encrypted Webflow OAuth connection and a small duplicate-delivery ledger in SQLite at `SLACKFLOW_STATE_PATH`. The CMS drafts themselves are stored in Webflow, not SQLite.
 
-### UptimeRobot
+Free Render services have an ephemeral filesystem. A restart, redeploy, or spin-down can remove the SQLite file. The result is that `@slackflow connect` and possibly `@slackflow schema` must be run again. Existing Webflow drafts are not affected.
 
-Create one HTTP(S) monitor for:
+For a short demo, this is acceptable. For reliable use, attach persistent storage or use a durable database and object storage for the state file. Keep the same `WEBFLOW_TOKEN_ENCRYPTION_KEY`, or existing encrypted tokens cannot be read.
 
-```text
-https://slackflow-demo.onrender.com/healthz
+An UptimeRobot HTTP(S) monitor can request `/healthz` every five minutes during a demo. It may reduce idle time on some free services, but it does not make free hosting durable or guarantee continuous uptime.
+
+## Safety boundaries
+
+- Slackflow creates only new CMS items. It does not search for and modify existing items.
+- It requests an unpublished draft and never calls Webflow publish, update, archive, or delete actions.
+- The create button is shown only after the selected CMS schema validates the proposed mapping.
+- The schema is checked again before creation.
+- Only verified CMS option IDs are used for select fields.
+- OAuth tokens are encrypted locally and never shown in Slack messages or logs.
+
+## Troubleshooting
+
+| Symptom | What to check |
+| --- | --- |
+| Bot cannot read a private thread | Invite the bot to the private channel and reinstall it if you just added `groups:history`. |
+| `connect` does not open OAuth | Check `PUBLIC_BASE_URL` is the deployed HTTPS origin with no extra path, then redeploy. |
+| `schema` is unavailable | Run `@slackflow connect`, complete OAuth, then run `@slackflow schema` in the same Slack thread. |
+| Create button is not shown | Ensure `schema` has captured the right collection and that required fields have valid source values. Read the Markdown review file for the exact field mapping. |
+| Webflow connection disappeared after deploy | The host likely lost ephemeral SQLite state. Run `@slackflow connect` and then `@slackflow schema` again. |
+| A create request may have timed out | Check Webflow for a new draft before pressing the button again. |
+
+## Verification commands
+
+Run these before deployment:
+
+```bash
+npm run check
+npm test
+npm run build
 ```
 
-Use UptimeRobot's available five-minute interval. Your monitor is currently up. These requests help avoid Render's 15-minute idle timeout during the demo, but they do not guarantee that a free Render service will never restart.
-
-Render Free has an ephemeral filesystem. The local SQLite run ledger can be lost after a restart, redeploy, or spin-down. That is acceptable for this demo, but any future Webflow OAuth connection may need to be reconnected after one of those events.
-
-## Webflow MCP boundaries
-
-Slackflow uses the MCP TypeScript client and Webflow's OAuth server. The local SQLite store encrypts OAuth tokens, dynamic client information, PKCE data, and OAuth discovery state using `WEBFLOW_TOKEN_ENCRYPTION_KEY`. The one-time browser link expires after ten minutes.
-
-Slackflow uses Webflow MCP through deterministic application code, not as unrestricted model tools. It maps only fields that exist in the captured schema and stops if a required field has no valid value.
-
-The writer creates a CMS item as a draft only. It does not call publish, update, or delete actions. See [WEBFLOW_CMS_INTEGRATION.md](WEBFLOW_CMS_INTEGRATION.md) for the technical contract.
-
-## Helpful links
+## Useful links
 
 - [Slack app quickstart](https://docs.slack.dev/quickstart/)
-- [Render web services](https://render.com/docs/web-services)
-- [Render Free limits](https://render.com/docs/free)
-- [UptimeRobot](https://uptimerobot.com/)
 - [Webflow MCP getting started](https://developers.webflow.com/mcp/reference/getting-started)
+- [Render web services](https://render.com/docs/web-services)
+- [Render free services](https://render.com/docs/free)
+- [UptimeRobot](https://uptimerobot.com/)

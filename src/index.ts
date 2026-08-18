@@ -70,7 +70,7 @@ function commandReply(command: Exclude<SlackflowCommand, "connect" | "disconnect
     case "help":
       return [
         "*Slackflow commands*",
-        "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, and one Blog Image in this thread.",
+        "• `@slackflow draft` prepares a strict-transfer draft, Markdown file, thumbnail, and banner in this thread.",
         "• `@slackflow status` shows the current Slackflow and Webflow state.",
         "• `@slackflow connect` posts a one-time Webflow OAuth link in this thread.",
         "• `@slackflow schema` reads a selected Webflow CMS schema only.",
@@ -483,7 +483,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
   if (command !== "draft") {
     await client.chat.postMessage({
       channel: event.channel,
-      text: command ? commandReply(command) : "Use `@slackflow help` to see the available commands. `@slackflow draft` prepares a strict-transfer proposal and one Slack-only Blog Image preview. Slackflow will not create or change anything in Webflow.",
+      text: command ? commandReply(command) : "Use `@slackflow help` to see the available commands. `@slackflow draft` prepares a strict-transfer proposal plus Slack-only thumbnail and banner previews. Slackflow will not create or change anything in Webflow.",
       thread_ts: rootTs
     });
     runStore.mark(body.event_id, "completed");

@@ -145,7 +145,7 @@ Your job is to identify exact source text for a blog-draft proposal. You never w
 Rules:
 1. Return mode "transfer" only. Never compose a blog draft.
 2. For every non-null source_selections value, exact_text must be a character-for-character substring of the cited Slack message. Copy source text exactly, including punctuation, capitalization, and Markdown. Never use your own wording.
-3. Select source_selections.title only when the exact title text is present in the thread. Select source_selections.body_markdown as one or more exact source segments in their original chronological order. Do not add a title, heading, transition, or separator as source text.
+3. Select source_selections.title only when the exact title text is present in the thread. Select source_selections.body_markdown as one or more exact source segments in their original chronological order. Do not add a title, heading, transition, or separator as source text. Do not select assistant closing menus or next-step offers such as "If you want, I can also" and numbered revision or approval choices; those are not article body.
 4. If a complete source title or body is unavailable, return null/an empty array for that selection, list the missing field, and set status to "needs_input". Do not infer or draft missing prose.
 5. For multiple body segments, Slackflow will concatenate the exact selected segments with a deterministic blank line. This is formatting only; do not add any text yourself.
 6. Return null for unavailable metadata. Never infer dates, URLs, images, categories, names, briefs, or facts.
@@ -247,7 +247,9 @@ function parseBodySourceSegments(value: unknown, sourceMessages: Map<string, str
       throw new Error("Model provider returned a null body source segment.");
     }
 
-    return segment;
+    const exactText = removeTrailingAssistantOffer(segment.exact_text);
+    if (!exactText) throw new Error("Model provider selected only a non-article assistant closing menu as body text.");
+    return { ...segment, exact_text: exactText };
   });
   const seenSegments = new Set<string>();
   let previousPosition = -1;
@@ -278,6 +280,21 @@ function parseBodySourceSegments(value: unknown, sourceMessages: Map<string, str
   return segments;
 }
 
+/** Removes only the known non-article closing menu from an otherwise exact source segment. */
+function removeTrailingAssistantOffer(value: string): string {
+  const marker = /^\s*If you want,\s*I can also:\s*$/im;
+  const match = marker.exec(value);
+  if (!match || match.index === undefined) return value;
+  return value.slice(0, match.index).replace(/\s+$/, "");
+}
+
+/** Markdown wrappers around an entire title are presentation syntax, not title text. */
+function titleWithoutOuterMarkdown(value: string): string {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^(\*{1,3}|_{1,3})([\s\S]*\S)\1$/);
+  return match ? match[2]!.trim() : trimmed;
+}
+
 function parseSourceSelections(value: unknown, transcript: ThreadTranscript): DraftSourceSelections {
   if (!isRecord(value)) {
     throw new Error("Model provider returned invalid draft source selections.");
@@ -297,7 +314,7 @@ function parseSourceSelections(value: unknown, transcript: ThreadTranscript): Dr
 
 function deriveFields(sourceSelections: DraftSourceSelections, tag: WebflowTag | null): DraftFields {
   return {
-    title: sourceSelections.title?.exact_text ?? null,
+    title: sourceSelections.title ? titleWithoutOuterMarkdown(sourceSelections.title.exact_text) : null,
     body_markdown: sourceSelections.body_markdown.length > 0
       ? sourceSelections.body_markdown.map((segment) => segment.exact_text).join("\n\n")
       : null,

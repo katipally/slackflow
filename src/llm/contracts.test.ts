@@ -70,6 +70,23 @@ test("derives a ready proposal solely from exact selected Slack text", () => {
   ]);
 });
 
+test("removes only outer Markdown title wrappers and a trailing assistant option menu", () => {
+  const sourceText = "_Exact title_\n\nExact article paragraph.\n\nIf you want, I can also:\n1. make this shorter\n2. create it in Notion";
+  const menuTranscript: ThreadTranscript = {
+    ...transcript,
+    messages: [{ authorId: "U_AUTHOR", isBot: false, text: sourceText, ts: "1710000000.000000" }]
+  };
+  const output = readyOutput();
+  const selections = output.source_selections as Record<string, unknown>;
+  selections.title = source("_Exact title_");
+  selections.body_markdown = [source("Exact article paragraph.\n\nIf you want, I can also:\n1. make this shorter\n2. create it in Notion")];
+  const proposal = parseDraftProposal(JSON.stringify(output), menuTranscript);
+
+  assert.equal(proposal.fields.title, "Exact title");
+  assert.equal(proposal.source_selections.title?.exact_text, "_Exact title_");
+  assert.equal(proposal.fields.body_markdown, "Exact article paragraph.");
+});
+
 test("rejects blog content that is not an exact substring of its cited Slack message", () => {
   const output = readyOutput();
   const selections = output.source_selections as Record<string, unknown>;

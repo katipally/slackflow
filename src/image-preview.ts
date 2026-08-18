@@ -123,7 +123,7 @@ async function renderBannerImage(thumbnail: Buffer, mimeType: "image/jpeg" | "im
 }
 
 /**
- * Creates the exact transferred draft and one review image. It cannot upload
+ * Creates the exact transferred draft and review images. It cannot upload
  * to Webflow or create or publish a CMS item; the caller decides where to show the files.
  */
 export async function generateSlackImagePreview(input: {
