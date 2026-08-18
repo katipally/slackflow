@@ -53,7 +53,7 @@ When the target collection changes, run `@slackflow schema` again and choose the
 
 A review stays usable for 24 hours, and survives a service restart when the service has persistent storage (see [DEPLOY.md](DEPLOY.md)).
 
-Before creating, Slackflow checks the target collection for an item with the same slug. If one exists it creates nothing and reports the existing item, so a retry after a timed-out request cannot produce a duplicate. Two posts that would share a slug need different titles.
+If a create request fails without a clear answer, press the same button again. Slackflow records each attempt, so on a retry it first checks whether the earlier attempt actually reached Webflow and reports that item instead of creating a second one. A first press is never blocked: Webflow assigns the slug and keeps it unique by itself, so two posts may share a title.
 
 Webflow's API returns no per-item editor URL, so **Open in Webflow** opens the Designer for the target site. The draft is the newest item in the selected collection.
 
@@ -92,7 +92,7 @@ On confirmation, Slackflow creates one new unpublished CMS item, fills only vali
 | Slackflow ignores a mention | Invite the bot to the channel. |
 | Bot cannot read a private thread | Invite the bot to that private channel. |
 | Create button is not shown | The captured collection cannot safely map this draft. The reply gives the reason; the Markdown review file shows the exact field mapping. Run `@slackflow schema` if the target collection changed. |
-| A create request may have timed out | Press the same button again. Slackflow checks the collection for the same slug first and reports the existing item instead of creating a second one. |
+| A create request may have timed out | Press the same button again. Slackflow checks whether that attempt reached Webflow and reports the item it made, instead of creating a second one. |
 | The review says it expired | Reviews last 24 hours. Run `@slackflow draft` again. |
 | `connect` or `schema` fails | Run `@slackflow status`. If it reports the Webflow connection missing or the service degraded, hand the reply to whoever operates the service and see [DEPLOY.md](DEPLOY.md). |
 

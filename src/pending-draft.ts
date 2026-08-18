@@ -10,6 +10,8 @@ type WebflowUploadedAssets = Partial<Record<"main" | "thumbnail", { id: string; 
 export type PendingWebflowDraft = {
   channel: string;
   collectionName?: string;
+  /** Set just before the first create call, so a retry can be told apart from a first press. */
+  createAttemptedAt?: number;
   contract: WebflowDraftContract;
   expiresAt: number;
   images: GeneratedImagePreview["webflowImages"];

@@ -8,6 +8,7 @@ function examplePendingDraft(): PendingWebflowDraft {
   return {
     channel: "C123",
     collectionName: "Forge Blog Posts",
+    createAttemptedAt: 1_799_999_999_000,
     contract: { collectionId: "collection-1", schemaFingerprint: "fingerprint" } as PendingWebflowDraft["contract"],
     expiresAt: 1_800_000_000_000,
     images: {
@@ -32,6 +33,8 @@ test("survives a JSON round trip through SQLite state with its image bytes intac
   assert.deepEqual(restored.images.thumbnail.file, draft.images.thumbnail.file);
   assert.equal(restored.images.thumbnail.mimeType, "image/jpeg");
   assert.equal(restored.siteShortName, "datasaur");
+  // A recorded attempt is what lets a retry tell a lost response apart from no create at all.
+  assert.equal(restored.createAttemptedAt, 1_799_999_999_000);
   assert.equal(restored.mapping.fieldData.slug, "post");
 });
 

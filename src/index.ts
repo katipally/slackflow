@@ -791,21 +791,22 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
     const liveSchema = await webflowConnection.getCollectionDetails(pending.mapping.collectionId);
     assertSchemaMatchesContract(liveSchema.data, pending.contract);
     const slug = typeof pending.mapping.fieldData.slug === "string" ? pending.mapping.fieldData.slug : undefined;
-    // A failed lookup must not block an approved create; it only forfeits the
-    // duplicate guard for this attempt.
-    const existing = slug
+    // Webflow assigns a unique slug itself, so a first press never needs this
+    // check. On a retry it is the only way to tell a lost response from a
+    // create that never happened. A failed lookup forfeits the check rather
+    // than blocking the approval.
+    const earlierAttempt = slug && pending.createAttemptedAt !== undefined
       ? await webflowConnection.findCollectionItemBySlug(pending.mapping.collectionId, slug).catch((error: unknown) => {
-        logger.warn(error, "Could not check Webflow for an existing item with the approved slug");
+        logger.warn(error, "Could not check Webflow for an item created by an earlier attempt");
         return undefined;
       })
       : undefined;
-    if (existing) {
-      // The review is kept: removing the conflicting item in Webflow makes this
-      // same button work, with no second model and image run.
+    if (earlierAttempt) {
+      // The review is kept: it stays valid until it expires.
       await client.chat.postMessage({
         channel: context.channel,
         thread_ts: pending.rootTs,
-        text: `:information_source: Webflow already has an item with the slug \`${slug}\` (\`${existing.id}\`), so Slackflow created nothing. Either that item is this draft from an earlier attempt, or another post shares its title. Open it in Webflow, or change the title in the source thread and run \`@slackflow draft\` again.`
+        text: `:information_source: An earlier attempt already produced a Webflow item with the slug \`${slug}\` (\`${earlierAttempt.id}\`), so Slackflow did not create a second one. Open that item in Webflow to confirm it is this draft.`
       });
       return;
     }
@@ -829,6 +830,8 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
         ...(uploaded.thumbnail ? { thumbnail: { ...uploaded.thumbnail, altText: pending.images.thumbnail.altText } } : {})
       });
     }
+    pending.createAttemptedAt = Date.now();
+    webflowConnection.savePendingDraft(draftId, pending);
     createdItem = await webflowConnection.createCollectionDraft({ collectionId: pending.mapping.collectionId, fieldData });
     webflowConnection.deletePendingDraft(draftId);
     const title = typeof pending.mapping.fieldData.name === "string" ? pending.mapping.fieldData.name : "Webflow draft";
@@ -854,7 +857,7 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
       ? "Do not retry this button. Check the item in Webflow first."
       : createdButSlackUpdateFailed
         ? `Webflow returned item \`${createdItem?.id}\`, so do not retry. Check Webflow before taking any further action.`
-        : "Press the same Create Webflow draft button again. Slackflow checks the collection for this slug first, so a request that already succeeded is reported instead of repeated.";
+        : "Press the same Create Webflow draft button again. This attempt was recorded, so Slackflow first checks whether it actually reached Webflow and reports that item instead of creating a second one.";
     await client.chat.postMessage({
       channel: context.channel,
       thread_ts: pending.rootTs,
