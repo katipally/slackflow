@@ -12,12 +12,14 @@ import {
   UnauthorizedError
 } from "@modelcontextprotocol/client";
 
+import { deserializePendingWebflowDraft, serializePendingWebflowDraft, type PendingWebflowDraft } from "./pending-draft.js";
 import { WebflowConnectionStore } from "./webflow-connection-store.js";
 import type { WebflowDraftContract } from "./webflow-draft.js";
 
 const CONNECTION_SESSION = "connection";
 const PENDING_PREFIX = "pending:";
 const PENDING_TTL_MS = 10 * 60 * 1000;
+const DRAFT_PREFIX = "draft:";
 
 type PendingMetadata = {
   expiresAt: number;
@@ -43,10 +45,20 @@ export type WebflowToolData = {
 
 export type SavedWebflowSchema = {
   collectionId: string;
+  collectionName?: string;
   contract?: WebflowDraftContract;
   readAt: number;
   schema: unknown;
   siteId: string;
+  siteShortName?: string;
+};
+
+type SchemaMetadata = {
+  collectionId?: string;
+  collectionName?: string;
+  readAt?: number;
+  siteId?: string;
+  siteShortName?: string;
 };
 
 export type WebflowAsset = { id: string; url?: string };
@@ -208,8 +220,14 @@ class WebflowOAuthProvider implements OAuthClientProvider {
   }
 }
 
+/** Webflow rejected the request itself, as opposed to the session failing. */
+class WebflowToolError extends Error {}
+
 export class WebflowMcpConnection {
   readonly configurationError: string | undefined;
+  private active?: { client: Client; transport: StreamableHTTPClientTransport };
+  private connecting?: Promise<{ client: Client; transport: StreamableHTTPClientTransport }>;
+  private readonly loadedTools = new Set<string>();
   private readonly pendingConnections = new Map<string, PendingConnection>();
   private readonly store?: WebflowConnectionStore;
 
@@ -316,6 +334,7 @@ export class WebflowMcpConnection {
 
       await authenticatedTransport.terminateSession().catch(() => undefined);
       await pending.client.close();
+      this.resetConnection();
       return pendingMetadata.slackContext;
     } finally {
       this.pendingConnections.delete(requestId);
@@ -344,6 +363,8 @@ export class WebflowMcpConnection {
     }
 
     this.store.removeSession(CONNECTION_SESSION);
+    for (const sessionId of this.store.sessionIds(DRAFT_PREFIX)) this.store.removeSession(sessionId);
+    this.resetConnection();
     return { state: "not_connected" };
   }
 
@@ -392,29 +413,79 @@ export class WebflowMcpConnection {
     );
   }
 
-  saveSchema(siteId: string, collectionId: string, schema: unknown, contract?: WebflowDraftContract): void {
+  /** Finds an existing item with the same slug so an uncertain retry cannot create a duplicate. */
+  async findCollectionItemBySlug(collectionId: string, slug: string): Promise<{ id: string } | undefined> {
+    const result = await this.callTool(
+      "data_cms_tool",
+      createWebflowDataToolRequest(
+        "Slackflow checks whether the approved draft slug already exists so an uncertain retry cannot create a duplicate CMS item.",
+        "Find an existing CMS item by slug",
+        { list_collection_items: { collection_id: collectionId, request: { filter: { slug: { eq: slug } }, limit: 1 } } }
+      )
+    );
+    const item = findItemWithSlug(result.data, slug);
+    return item ? { id: item } : undefined;
+  }
+
+  saveSchema(input: { collectionId: string; collectionName?: string; contract?: WebflowDraftContract; schema: unknown; siteId: string; siteShortName?: string }): void {
     const store = this.requireConnectedStore();
-    store.set(CONNECTION_SESSION, "cms_schema", schema);
-    store.set(CONNECTION_SESSION, "cms_schema_metadata", { collectionId, readAt: Date.now(), siteId });
-    if (contract) store.set(CONNECTION_SESSION, "cms_draft_contract", contract);
+    store.set(CONNECTION_SESSION, "cms_schema", input.schema);
+    store.set(CONNECTION_SESSION, "cms_schema_metadata", {
+      collectionId: input.collectionId,
+      collectionName: input.collectionName,
+      readAt: Date.now(),
+      siteId: input.siteId,
+      siteShortName: input.siteShortName
+    } satisfies SchemaMetadata);
+    if (input.contract) store.set(CONNECTION_SESSION, "cms_draft_contract", input.contract);
     else store.remove(CONNECTION_SESSION, "cms_draft_contract");
   }
 
   getSavedSchema(): SavedWebflowSchema | undefined {
     if (!this.store || this.configurationError || this.status().state !== "connected") return undefined;
-    const metadata = this.store.get<{ collectionId?: string; readAt?: number; siteId?: string }>(CONNECTION_SESSION, "cms_schema_metadata");
+    const metadata = this.store.get<SchemaMetadata>(CONNECTION_SESSION, "cms_schema_metadata");
     const schema = this.store.get<unknown>(CONNECTION_SESSION, "cms_schema");
     if (!metadata?.collectionId || !metadata.readAt || !metadata.siteId || schema === undefined) return undefined;
     const contract = this.store.get<WebflowDraftContract>(CONNECTION_SESSION, "cms_draft_contract");
-    return { collectionId: metadata.collectionId, contract, readAt: metadata.readAt, schema, siteId: metadata.siteId };
+    return {
+      collectionId: metadata.collectionId,
+      collectionName: metadata.collectionName,
+      contract,
+      readAt: metadata.readAt,
+      schema,
+      siteId: metadata.siteId,
+      siteShortName: metadata.siteShortName
+    };
   }
 
-  schemaStatus(): { state: "not_read" } | { state: "read"; collectionId: string; readAt: number; siteId: string } {
+  schemaStatus(): { state: "not_read" } | { state: "read"; collectionId: string; collectionName?: string; readAt: number; siteId: string } {
     if (!this.store || this.configurationError) return { state: "not_read" };
 
-    const metadata = this.store.get<{ collectionId?: string; readAt?: number; siteId?: string }>(CONNECTION_SESSION, "cms_schema_metadata");
+    const metadata = this.store.get<SchemaMetadata>(CONNECTION_SESSION, "cms_schema_metadata");
     if (!metadata?.collectionId || !metadata.readAt || !metadata.siteId) return { state: "not_read" };
-    return { state: "read", collectionId: metadata.collectionId, readAt: metadata.readAt, siteId: metadata.siteId };
+    return { state: "read", collectionId: metadata.collectionId, collectionName: metadata.collectionName, readAt: metadata.readAt, siteId: metadata.siteId };
+  }
+
+  /** Keeps an approved review usable across a restart or a free-host spin-down. */
+  savePendingDraft(draftId: string, draft: PendingWebflowDraft): void {
+    const store = this.requireConnectedStore();
+    this.prunePendingDrafts(store);
+    store.set(this.draftSession(draftId), "record", serializePendingWebflowDraft(draft));
+  }
+
+  getPendingDraft(draftId: string): PendingWebflowDraft | undefined {
+    if (!this.store || this.configurationError) return undefined;
+    const draft = deserializePendingWebflowDraft(this.store.get<unknown>(this.draftSession(draftId), "record"));
+    if (!draft) return undefined;
+    if (draft.expiresAt <= Date.now()) {
+      this.deletePendingDraft(draftId);
+      return undefined;
+    }
+    return draft;
+  }
+
+  deletePendingDraft(draftId: string): void {
+    this.store?.removeSession(this.draftSession(draftId));
   }
 
   async uploadImageAsset(input: {
@@ -469,7 +540,8 @@ export class WebflowMcpConnection {
         "Slackflow creates one explicitly approved unpublished CMS draft using the previously validated field mapping.",
         "Create unpublished CMS draft",
         createWebflowCollectionDraftAction(input.collectionId, input.fieldData)
-      )
+      ),
+      { retryOnce: false }
     );
     const item = findCreatedItem(result.data);
     if (!item) throw new Error("Webflow did not return the created CMS draft item.");
@@ -484,41 +556,107 @@ export class WebflowMcpConnection {
     return new StreamableHTTPClientTransport(new URL(this.config.mcpUrl), { authProvider: provider });
   }
 
-  private async callTool(name: string, args: Record<string, unknown>): Promise<WebflowToolData> {
+  /**
+   * One MCP session serves every call. `retryOnce` is deliberately off for
+   * writes: a dropped response must never turn into a second CMS item.
+   */
+  private async callTool(name: string, args: Record<string, unknown>, options?: { retryOnce?: boolean }): Promise<WebflowToolData> {
+    try {
+      return await this.attemptTool(name, args);
+    } catch (error) {
+      // Webflow answering with an error means the session is healthy and the
+      // same call would fail identically. Only a broken session is retried.
+      if (error instanceof WebflowToolError) throw error;
+      this.resetConnection();
+
+      if (UnauthorizedError.isInstance(error)) {
+        throw new Error("Webflow OAuth is no longer valid. Run @slackflow connect again.");
+      }
+
+      if (options?.retryOnce === false) throw error;
+
+      try {
+        return await this.attemptTool(name, args);
+      } catch (retryError) {
+        if (retryError instanceof WebflowToolError) throw retryError;
+        this.resetConnection();
+        if (UnauthorizedError.isInstance(retryError)) {
+          throw new Error("Webflow OAuth is no longer valid. Run @slackflow connect again.");
+        }
+        throw retryError;
+      }
+    }
+  }
+
+  private async attemptTool(name: string, args: Record<string, unknown>): Promise<WebflowToolData> {
+    const client = await this.connectedClient();
+    await this.ensureTool(client, name);
+    const result = await client.callTool({ arguments: args, name });
+    const text = result.content
+      .filter((item): item is { type: "text"; text: string } => item.type === "text")
+      .map((item) => item.text)
+      .join("\n");
+
+    if (result.isError) {
+      throw new WebflowToolError(text || "Webflow MCP could not complete the requested action.");
+    }
+
+    return { data: result.structuredContent ?? parseJson(text), text };
+  }
+
+  private async connectedClient(): Promise<Client> {
+    if (this.active) return this.active.client;
+
+    if (!this.connecting) {
+      const attempt = this.openConnection();
+      this.connecting = attempt;
+      void attempt.catch(() => undefined).then(() => {
+        if (this.connecting === attempt) this.connecting = undefined;
+      });
+    }
+
+    return (await this.connecting).client;
+  }
+
+  private async openConnection(): Promise<{ client: Client; transport: StreamableHTTPClientTransport }> {
     const store = this.requireConnectedStore();
     const callbackUrl = new URL("/webflow/oauth/callback", this.config.publicBaseUrl).toString();
     const provider = new WebflowOAuthProvider(store, CONNECTION_SESSION, callbackUrl);
     const transport = this.createTransport(provider);
     const client = this.createClient();
+    await client.connect(transport);
+    this.active = { client, transport };
+    return this.active;
+  }
 
-    try {
-      await client.connect(transport);
-      await this.ensureTool(client, name);
-      const result = await client.callTool({ arguments: args, name });
-      const text = result.content
-        .filter((item): item is { type: "text"; text: string } => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
+  private resetConnection(): void {
+    const active = this.active;
+    this.active = undefined;
+    this.loadedTools.clear();
+    if (!active) return;
+    void active.transport.terminateSession().catch(() => undefined);
+    void active.client.close().catch(() => undefined);
+  }
 
-      if (result.isError) {
-        throw new Error(text || "Webflow MCP could not complete the read-only request.");
-      }
+  private draftSession(draftId: string): string {
+    return `${DRAFT_PREFIX}${draftId}`;
+  }
 
-      return { data: result.structuredContent ?? parseJson(text), text };
-    } catch (error) {
-      if (UnauthorizedError.isInstance(error)) {
-        throw new Error("Webflow OAuth is no longer valid. Run @slackflow connect again.");
-      }
-      throw error;
-    } finally {
-      await transport.terminateSession().catch(() => undefined);
-      await client.close().catch(() => undefined);
+  private prunePendingDrafts(store: WebflowConnectionStore): void {
+    for (const sessionId of store.sessionIds(DRAFT_PREFIX)) {
+      const record = deserializePendingWebflowDraft(store.get<unknown>(sessionId, "record"));
+      if (!record || record.expiresAt <= Date.now()) store.removeSession(sessionId);
     }
   }
 
   private async ensureTool(client: Client, requiredTool: string): Promise<void> {
+    if (this.loadedTools.has(requiredTool)) return;
+
     const available = await client.listTools();
-    if (available.tools.some((tool) => tool.name === requiredTool)) return;
+    if (available.tools.some((tool) => tool.name === requiredTool)) {
+      this.loadedTools.add(requiredTool);
+      return;
+    }
 
     if (!available.tools.some((tool) => tool.name === "get_more_tools")) {
       throw new Error(`Webflow MCP did not make the required ${requiredTool} tool available.`);
@@ -541,6 +679,7 @@ export class WebflowMcpConnection {
     if (!refreshed.tools.some((tool) => tool.name === requiredTool)) {
       throw new Error(`Webflow MCP did not provide the required ${requiredTool} tool.`);
     }
+    this.loadedTools.add(requiredTool);
   }
 
   private pendingSession(requestId: string): string {
@@ -687,6 +826,31 @@ function findAssetUpload(value: unknown): AssetUploadTarget | undefined {
       const url = typeof record.hostedUrl === "string" ? record.hostedUrl : typeof record.assetUrl === "string" ? record.assetUrl : undefined;
       return { id, uploadUrl, uploadDetails, url };
     }
+    for (const child of Object.values(record)) {
+      const found = visit(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return visit(value);
+}
+
+/** Returns the id of an item whose own slug matches exactly. */
+export function findItemWithSlug(value: unknown, slug: string): string | undefined {
+  const seen = new Set<unknown>();
+  const visit = (item: unknown): string | undefined => {
+    if (!item || typeof item !== "object" || seen.has(item)) return undefined;
+    seen.add(item);
+    if (Array.isArray(item)) {
+      for (const child of item) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const fieldData = isRecord(record.fieldData) ? record.fieldData : undefined;
+    if (typeof record.id === "string" && fieldData?.slug === slug) return record.id;
     for (const child of Object.values(record)) {
       const found = visit(child);
       if (found) return found;

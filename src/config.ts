@@ -44,13 +44,11 @@ function configuredImageOutputFormat(): "jpeg" | "png" | "webp" {
 }
 
 export const config = {
-  nodeEnv: process.env.NODE_ENV ?? "development",
   port: Number(process.env.PORT ?? "3000"),
   statePath: process.env.SLACKFLOW_STATE_PATH?.trim() || ".slackflow/state.sqlite",
   slack: {
     appToken: requiredEnvironmentValue("SLACK_APP_TOKEN"),
-    botToken: requiredEnvironmentValue("SLACK_BOT_TOKEN"),
-    signingSecret: requiredEnvironmentValue("SLACK_SIGNING_SECRET")
+    botToken: requiredEnvironmentValue("SLACK_BOT_TOKEN")
   },
   llm: {
     model: process.env.LLM_MODEL?.trim() || "gpt-5.6-luna",

@@ -63,6 +63,16 @@ export class WebflowConnectionStore {
     this.database.prepare("DELETE FROM webflow_connection_values WHERE session_id = ? AND value_key = ?").run(sessionId, valueKey);
   }
 
+  /** Returns matching session identifiers only. Stored values stay encrypted. */
+  sessionIds(prefix: string): string[] {
+    const escaped = prefix.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+    const rows = this.database
+      .prepare("SELECT DISTINCT session_id FROM webflow_connection_values WHERE session_id LIKE ? ESCAPE '\\'")
+      .all(`${escaped}%`) as Array<{ session_id?: string }>;
+
+    return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
+  }
+
   removeSession(sessionId: string): void {
     this.database.prepare("DELETE FROM webflow_connection_values WHERE session_id = ?").run(sessionId);
   }
