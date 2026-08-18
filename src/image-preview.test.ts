@@ -36,7 +36,7 @@ const proposal: DraftProposal = {
   }
 };
 
-test("generates a full transferred Markdown file and one 1920x1080 image using the verbatim prompt", async () => {
+test("generates a full transferred Markdown file plus a 1920x1080 thumbnail and 1920x640 banner", async () => {
   const calls: Array<{ prompt: string; size: string }> = [];
   const sourceImage = await sharp({
     create: { width: 1536, height: 1024, channels: 3, background: { r: 0, g: 0, b: 0 } }
@@ -57,20 +57,24 @@ test("generates a full transferred Markdown file and one 1920x1080 image using t
   assert.equal(calls.length, 1);
   assert.match(calls[0]?.prompt ?? "", /"resolution": "1920x1080"/);
   assert.match(calls[0]?.prompt ?? "", /Title: Open models shift adoption/);
-  assert.equal(preview.fileUploads.length, 2);
+  assert.equal(preview.fileUploads.length, 3);
   assert.equal(preview.fileUploads[0]?.filename, "open-models-shift-adoption-draft.md");
   assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /## Field values/);
   assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /\*\*Slug:\*\* open-models-shift-adoption/);
   assert.match(preview.fileUploads[0]?.file.toString("utf8") ?? "", /## Post Body\n\nA reviewed article body\./);
-  assert.equal(preview.fileUploads[1]?.filename, "open-models-shift-adoption-blog-image.jpg");
+  assert.equal(preview.fileUploads[1]?.filename, "open-models-shift-adoption-thumbnail.jpg");
   const uploadedImage = preview.fileUploads[1]?.file;
   assert.ok(uploadedImage);
   assert.deepEqual(await sharp(uploadedImage).metadata().then(({ width, height }) => ({ width, height })), {
     width: 1920,
     height: 1080
   });
-  assert.equal(preview.fileUploads.length, 2);
-  assert.equal(preview.webflowImage.filename, "open-models-shift-adoption-blog-image.jpg");
-  assert.equal(preview.webflowImage.file, uploadedImage);
-  assert.equal(preview.webflowImage.mimeType, "image/jpeg");
+  assert.equal(preview.fileUploads[2]?.filename, "open-models-shift-adoption-banner.jpg");
+  assert.deepEqual(await sharp(preview.fileUploads[2]?.file).metadata().then(({ width, height }) => ({ width, height })), {
+    width: 1920,
+    height: 640
+  });
+  assert.equal(preview.webflowImages.thumbnail.filename, "open-models-shift-adoption-thumbnail.jpg");
+  assert.equal(preview.webflowImages.thumbnail.file, uploadedImage);
+  assert.equal(preview.webflowImages.banner.mimeType, "image/jpeg");
 });

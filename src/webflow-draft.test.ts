@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { applyWebflowImageToDraft, assertSchemaMatchesContract, createExtractivePostSummary, createWebflowDraftContract, createWebflowDraftMapping, markdownToWebflowHtml } from "./webflow-draft.js";
+import { applyWebflowImagesToDraft, assertSchemaMatchesContract, createExtractivePostSummary, createWebflowDraftContract, createWebflowDraftMapping, markdownToWebflowHtml, verifiedCategoryItemIds } from "./webflow-draft.js";
 import type { DraftProposal } from "./llm/contracts.js";
 
 const proposal = {
@@ -31,8 +31,17 @@ test("maps only the fixed verified Forge Blog Post fields and fixes Writer to Da
     writer: "Datasaur",
     tag: "ai"
   });
-  assert.deepEqual(mapping.imageFieldSlugs, ["main-image", "thumbnail-image"]);
-  assert.deepEqual(applyWebflowImageToDraft(mapping, { id: "asset", url: "https://cdn.example/image.jpg", altText: "Article image" })["main-image"], {
+  assert.deepEqual(mapping.imageFieldSlugs, { main: "main-image", thumbnail: "thumbnail-image" });
+  assert.deepEqual(applyWebflowImagesToDraft(mapping, {
+    main: { id: "banner", url: "https://cdn.example/banner.jpg", altText: "Banner" },
+    thumbnail: { id: "asset", url: "https://cdn.example/image.jpg", altText: "Article image" }
+  })["main-image"], {
+    alt: "Banner", fileId: "banner", url: "https://cdn.example/banner.jpg"
+  });
+  assert.deepEqual(applyWebflowImagesToDraft(mapping, {
+    main: { id: "banner", url: "https://cdn.example/banner.jpg", altText: "Banner" },
+    thumbnail: { id: "asset", url: "https://cdn.example/image.jpg", altText: "Article image" }
+  })["thumbnail-image"], {
     alt: "Article image", fileId: "asset", url: "https://cdn.example/image.jpg"
   });
 });
@@ -132,6 +141,20 @@ test("HTML conversion deterministically preserves headings, lists, links, and in
     markdownToWebflowHtml("# Heading\n\n- One\n- Two\n\n**bold** and [source](https://example.com)"),
     '<h1>Heading</h1><ul><li>One</li><li>Two</li></ul><p><strong>bold</strong> and <a href="https://example.com">source</a></p>'
   );
+});
+
+test("HTML conversion uses a standalone italic source line as an H2 without changing its text", () => {
+  assert.equal(markdownToWebflowHtml("Opening text.\n\n*Source signalled section*\n\nClosing text."), "<p>Opening text.</p><h2>Source signalled section</h2><p>Closing text.</p>");
+});
+
+test("maps an exact verified Category item matching the approved Tag", () => {
+  const categoryItems = verifiedCategoryItemIds({ items: [{ id: "category-ai", fieldData: { name: "AI Industry" } }] });
+  const contract = createWebflowDraftContract({
+    categoryItemIds: categoryItems,
+    collectionId: "collection",
+    schema: { fields: [...schema.fields, { displayName: "Category", slug: "category", type: "MultiReference", isRequired: false, metadata: { collectionId: "categories" } }] }
+  });
+  assert.deepEqual(createWebflowDraftMapping({ contract, proposal }).fieldData.category, ["category-ai"]);
 });
 
 test("extractive post summary copies only text from the reviewed body", () => {

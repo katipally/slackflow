@@ -74,7 +74,7 @@ export function createWebflowCollectionDraftAction(
   collectionId: string,
   fieldData: Record<string, unknown>
 ): Record<string, unknown> {
-  return { create_collection_items: { collection_id: collectionId, request: { fieldData: [fieldData] } } };
+  return { create_collection_items: { collection_id: collectionId, request: { fieldData: [fieldData], isDraft: true } } };
 }
 
 type PendingConnection = {
@@ -377,6 +377,17 @@ export class WebflowMcpConnection {
         "Slackflow reads the selected CMS collection fields to validate the draft mapping before any content is created.",
         "Read selected CMS collection fields",
         { get_collection_details: { collection_id: collectionId } }
+      )
+    );
+  }
+
+  async listCollectionItems(collectionId: string): Promise<WebflowToolData> {
+    return this.callTool(
+      "data_cms_tool",
+      createWebflowDataToolRequest(
+        "Slackflow reads existing category items only to map an exact verified Category value. It does not create, edit, or publish any CMS item.",
+        "List category collection items",
+        { list_collection_items: { collection_id: collectionId } }
       )
     );
   }

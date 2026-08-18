@@ -16,17 +16,16 @@ export type SlackImageUpload = {
 export type GeneratedImagePreview = {
   fileUploads: SlackImageUpload[];
   providerRequestIds: Array<string | null>;
-  /** The same single review asset, retained in memory for a later approved CMS draft. */
-  webflowImage: {
-    altText: string;
-    file: Buffer;
-    filename: string;
-    mimeType: "image/jpeg" | "image/png" | "image/webp";
+  /** A 16:9 thumbnail and an uncropped, black-canvas banner derived from it. */
+  webflowImages: {
+    banner: { altText: string; file: Buffer; filename: string; mimeType: "image/jpeg" | "image/png" | "image/webp" };
+    thumbnail: { altText: string; file: Buffer; filename: string; mimeType: "image/jpeg" | "image/png" | "image/webp" };
   };
 };
 
 const BLOG_IMAGE_WIDTH = 1920;
 const BLOG_IMAGE_HEIGHT = 1080;
+const BANNER_IMAGE_HEIGHT = 640;
 
 function filenameStem(title: string): string {
   const stem = title
@@ -68,13 +67,13 @@ function renderDraftMarkdown(proposal: DraftProposal): string {
     `- **Source URL:** ${value(proposal.fields.source_url)}`,
     `- **Tag:** ${value(proposal.fields.tag)}`,
     `- **Post Summary:** ${createExtractivePostSummary(proposal.fields.body_markdown)}`,
-    "- **Main Image:** Attached Blog Image (1920x1080 review asset).",
-    "- **Thumbnail Image:** The same attached Blog Image, if the selected CMS schema validates this image field.",
+    "- **Main Image:** Attached banner derived from the reviewed Blog Image (1920x640).",
+    "- **Thumbnail Image:** Attached Blog Image (1920x1080).",
     "- **Featured?:** Leave at the collection default.",
     "- **Color:** Leave blank.",
     "- **Writer:** Datasaur.",
     "- **Writer Profile Image:** Leave blank unless the selected CMS mapping has a verified default.",
-    "- **Category:** Leave blank unless it is explicitly supplied or the selected CMS mapping has a verified rule.",
+    "- **Category:** Matching verified CMS Category item for the selected Tag, when the selected CMS schema has one.",
     "- **Slide Show Popup:** Leave blank.",
     "- **Created On (Inputted):** Leave blank.",
     "",
@@ -108,6 +107,21 @@ async function renderBlogImage(base64Data: string, mimeType: "image/jpeg" | "ima
   }
 }
 
+/** Preserve every pixel of the reviewed thumbnail inside the site's wide banner canvas. */
+async function renderBannerImage(thumbnail: Buffer, mimeType: "image/jpeg" | "image/png" | "image/webp"): Promise<Buffer> {
+  const image = sharp(thumbnail).resize({
+    width: BLOG_IMAGE_WIDTH,
+    height: BANNER_IMAGE_HEIGHT,
+    fit: "contain",
+    background: { r: 0, g: 0, b: 0, alpha: 1 }
+  });
+  switch (mimeType) {
+    case "image/jpeg": return image.jpeg().toBuffer();
+    case "image/png": return image.png().toBuffer();
+    case "image/webp": return image.webp().toBuffer();
+  }
+}
+
 /**
  * Creates the exact transferred draft and one review image. It cannot upload
  * to Webflow or create or publish a CMS item; the caller decides where to show the files.
@@ -125,9 +139,12 @@ export async function generateSlackImagePreview(input: {
 
   const prompt = await loadImagePrompt({ title: proposal.fields.title, content: proposal.fields.body_markdown });
   const image = await input.imageProvider.generateImage({ prompt, size: input.imageSize });
-  const blogImage = await renderBlogImage(image.base64Data, image.mimeType);
+  const thumbnail = await renderBlogImage(image.base64Data, image.mimeType);
+  const banner = await renderBannerImage(thumbnail, image.mimeType);
   const stem = filenameStem(proposal.fields.title);
-  const imageFilename = `${stem}-blog-image.${fileExtension(image.mimeType)}`;
+  const extension = fileExtension(image.mimeType);
+  const thumbnailFilename = `${stem}-thumbnail.${extension}`;
+  const bannerFilename = `${stem}-banner.${extension}`;
 
   return {
     fileUploads: [
@@ -138,18 +155,32 @@ export async function generateSlackImagePreview(input: {
         title: `${proposal.fields.title} — Strict-transfer Draft`
       },
       {
-        alt_text: `Generated blog image for ${proposal.fields.title}`,
-        file: blogImage,
-        filename: imageFilename,
-        title: `${proposal.fields.title} — Blog Image`
+        alt_text: `Generated 1920 by 1080 blog thumbnail for ${proposal.fields.title}`,
+        file: thumbnail,
+        filename: thumbnailFilename,
+        title: `${proposal.fields.title} — Thumbnail Image`
+      },
+      {
+        alt_text: `Generated 1920 by 640 banner for ${proposal.fields.title}`,
+        file: banner,
+        filename: bannerFilename,
+        title: `${proposal.fields.title} — Banner Image`
       }
     ],
     providerRequestIds: [image.providerRequestId],
-    webflowImage: {
-      altText: `Generated blog image for ${proposal.fields.title}`,
-      file: blogImage,
-      filename: imageFilename,
-      mimeType: image.mimeType
+    webflowImages: {
+      banner: {
+        altText: `Generated banner for ${proposal.fields.title}`,
+        file: banner,
+        filename: bannerFilename,
+        mimeType: image.mimeType
+      },
+      thumbnail: {
+        altText: `Generated thumbnail for ${proposal.fields.title}`,
+        file: thumbnail,
+        filename: thumbnailFilename,
+        mimeType: image.mimeType
+      }
     }
   };
 }

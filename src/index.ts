@@ -16,7 +16,7 @@ import { fetchEntireThread } from "./slack-thread-collector.js";
 import { buildThreadTranscript } from "./thread.js";
 import { WebflowMcpConnection, type WebflowCreatedItem } from "./webflow-mcp.js";
 import { renderWebflowOAuthPage } from "./webflow-oauth-page.js";
-import { applyWebflowImageToDraft, assertSchemaMatchesContract, createWebflowDraftContract, createWebflowDraftMapping, type WebflowDraftContract, type WebflowDraftMapping } from "./webflow-draft.js";
+import { applyWebflowImagesToDraft, assertSchemaMatchesContract, categoryReferenceCollectionId, createWebflowDraftContract, createWebflowDraftMapping, verifiedCategoryItemIds, type WebflowDraftContract, type WebflowDraftMapping } from "./webflow-draft.js";
 
 const app = new App({
   appToken: config.slack.appToken,
@@ -45,12 +45,12 @@ type PendingWebflowDraft = {
   channel: string;
   contract: WebflowDraftContract;
   expiresAt: number;
-  image: GeneratedImagePreview["webflowImage"];
+  images: GeneratedImagePreview["webflowImages"];
   inFlight: boolean;
   mapping: WebflowDraftMapping;
   rootTs: string;
   siteId: string;
-  uploadedAsset?: { id: string; url?: string };
+  uploadedAssets?: Partial<Record<"main" | "thumbnail", { id: string; url?: string }>>;
 };
 
 const pendingWebflowDrafts = new Map<string, PendingWebflowDraft>();
@@ -254,7 +254,7 @@ function webflowConnectedBlocks() {
 function webflowDraftApprovalBlocks(input: { draftId: string; mapping: WebflowDraftMapping }) {
   return [
     { type: "header" as const, text: { type: "plain_text" as const, text: "Create Webflow draft?", emoji: true } },
-    { type: "section" as const, text: { type: "mrkdwn" as const, text: "Review the attached Markdown and Blog Image. This creates one *unpublished* CMS draft and never publishes it." } },
+    { type: "section" as const, text: { type: "mrkdwn" as const, text: "Review the attached Markdown, Thumbnail Image, and Banner Image. This creates one *unpublished* CMS draft and never publishes it." } },
     {
       type: "actions" as const,
       elements: [{
@@ -265,7 +265,7 @@ function webflowDraftApprovalBlocks(input: { draftId: string; mapping: WebflowDr
         value: input.draftId,
         confirm: {
           title: { type: "plain_text" as const, text: "Create unpublished Webflow draft?", emoji: true },
-          text: { type: "mrkdwn" as const, text: "Slackflow will upload the reviewed image and create one CMS item as a draft. It will not publish it." },
+          text: { type: "mrkdwn" as const, text: "Slackflow will upload the reviewed thumbnail and banner, then create one CMS item as a draft. It will not publish it." },
           confirm: { type: "plain_text" as const, text: "Create draft", emoji: true },
           deny: { type: "plain_text" as const, text: "Cancel", emoji: true }
         }
@@ -553,7 +553,7 @@ app.event("app_mention", async ({ body, client, event, logger }) => {
           const draftId = storePendingWebflowDraft({
             channel: event.channel,
             contract: savedSchema.contract,
-            image: imagePreview.webflowImage,
+            images: imagePreview.webflowImages,
             mapping,
             rootTs,
             siteId: savedSchema.siteId
@@ -658,7 +658,11 @@ app.action("slackflow_select_collection", async ({ ack, action, body, client, lo
     let contract: WebflowDraftContract | undefined;
     let contractText: string;
     try {
-      contract = createWebflowDraftContract({ collectionId: selection.collectionId, schema: details.data });
+      const categoryCollectionId = categoryReferenceCollectionId(details.data);
+      const categoryItemIds = categoryCollectionId
+        ? verifiedCategoryItemIds((await webflowConnection.listCollectionItems(categoryCollectionId)).data)
+        : undefined;
+      contract = createWebflowDraftContract({ categoryItemIds, collectionId: selection.collectionId, schema: details.data });
       webflowConnection.saveSchema(selection.siteId, selection.collectionId, details.data, contract);
       contractText = `*Draft contract:* ready (fingerprint \`${contract.schemaFingerprint.slice(0, 12)}…\`)\nIt fixes Writer to *Datasaur*, accepts only verified Tag option IDs, leaves its approved fields blank, and blocks unexpected required fields. Slackflow will re-check this contract before every create.`;
     } catch (error) {
@@ -706,21 +710,25 @@ app.action("slackflow_create_webflow_draft", async ({ ack, action, body, client,
     const liveSchema = await webflowConnection.getCollectionDetails(pending.mapping.collectionId);
     assertSchemaMatchesContract(liveSchema.data, pending.contract);
     let fieldData = pending.mapping.fieldData;
-    if (pending.mapping.imageFieldSlugs.length > 0) {
-      const asset = pending.uploadedAsset ?? await webflowConnection.uploadImageAsset({
-        file: pending.image.file,
-        filename: pending.image.filename,
-        mimeType: pending.image.mimeType,
-        siteId: pending.siteId
+    if (pending.mapping.imageFieldSlugs.main || pending.mapping.imageFieldSlugs.thumbnail) {
+      const uploaded = pending.uploadedAssets ?? {};
+      for (const kind of ["main", "thumbnail"] as const) {
+        if (!pending.mapping.imageFieldSlugs[kind] || uploaded[kind]) continue;
+        const image = kind === "main" ? pending.images.banner : pending.images.thumbnail;
+        uploaded[kind] = await webflowConnection.uploadImageAsset({
+          file: image.file,
+          filename: image.filename,
+          mimeType: image.mimeType,
+          siteId: pending.siteId
+        });
+        pending.uploadedAssets = uploaded;
+      }
+      fieldData = applyWebflowImagesToDraft(pending.mapping, {
+        ...(uploaded.main ? { main: { ...uploaded.main, altText: pending.images.banner.altText } } : {}),
+        ...(uploaded.thumbnail ? { thumbnail: { ...uploaded.thumbnail, altText: pending.images.thumbnail.altText } } : {})
       });
-      pending.uploadedAsset = asset;
-      fieldData = applyWebflowImageToDraft(pending.mapping, { ...asset, altText: pending.image.altText });
     }
     createdItem = await webflowConnection.createCollectionDraft({ collectionId: pending.mapping.collectionId, fieldData });
-    if (createdItem.isDraft === false) {
-      pendingWebflowDrafts.delete(draftId);
-      throw new Error("Webflow returned an item that was not marked as a draft. Slackflow did not publish it, but stop and check Webflow before retrying.");
-    }
     pendingWebflowDrafts.delete(draftId);
     const title = typeof pending.mapping.fieldData.name === "string" ? pending.mapping.fieldData.name : "Webflow draft";
     const blocks = webflowDraftCreatedBlocks({ itemId: createdItem.id, title, editorUrl: createdItem.editorUrl });

@@ -7,7 +7,7 @@ export const DEFAULT_WEBFLOW_WRITER = "Datasaur";
 export type WebflowDraftMapping = {
   collectionId: string;
   fieldData: Record<string, unknown>;
-  imageFieldSlugs: string[];
+  imageFieldSlugs: { main?: string; thumbnail?: string };
   schemaFingerprint: string;
 };
 
@@ -15,14 +15,15 @@ export type WebflowDraftMapping = {
 export type WebflowDraftContract = {
   approvedBlankFields: string[];
   body: { slug: string; type: string };
+  category?: { itemIds: Partial<Record<WebflowTag, string>>; slug: string; type: string };
   collectionId: string;
-  imageFieldSlugs: string[];
+  images: { main?: { slug: string }; thumbnail?: { slug: string } };
   publicationDate?: { isRequired: boolean; slug: string; type: string };
   schemaFingerprint: string;
   summary?: { slug: string; type: string };
   sourceUrl?: { isRequired: boolean; slug: string; type: string };
   tag: { optionIds: Partial<Record<WebflowTag, string>>; slug: string };
-  version: 1;
+  version: 2;
   writer: { slug: string; value: typeof DEFAULT_WEBFLOW_WRITER };
 };
 
@@ -30,6 +31,7 @@ type SchemaField = {
   displayName: string;
   isRequired: boolean;
   options: Array<{ id: string; name: string }>;
+  referenceCollectionId?: string;
   slug: string;
   type: string;
 };
@@ -69,6 +71,7 @@ function asSchemaField(value: unknown): SchemaField | undefined {
     displayName,
     isRequired: value.isRequired === true || value.required === true,
     options: optionValues(value.options).concat(optionValues(validations?.options), optionValues(metadata?.options)),
+    referenceCollectionId: text(metadata?.collectionId) ?? text(validations?.collectionId),
     slug,
     type
   };
@@ -106,6 +109,7 @@ export function schemaFingerprint(schema: unknown): string {
       displayName: field.displayName,
       isRequired: field.isRequired,
       options: field.options.slice().sort((left, right) => left.id.localeCompare(right.id)),
+      referenceCollectionId: field.referenceCollectionId,
       slug: field.slug,
       type: field.type
     }))
@@ -116,6 +120,31 @@ export function schemaFingerprint(schema: unknown): string {
 function findField(fields: SchemaField[], label: string): SchemaField | undefined {
   const wanted = normalize(label);
   return fields.find((field) => normalize(field.displayName) === wanted || normalize(field.slug) === wanted);
+}
+
+/** Returns the Category reference collection only when the selected schema exposes one. */
+export function categoryReferenceCollectionId(schema: unknown): string | undefined {
+  return findField(extractSchemaFields(schema), "Category")?.referenceCollectionId;
+}
+
+/** Extracts only exact, pre-existing category labels that match an allowed Tag. */
+export function verifiedCategoryItemIds(data: unknown): Partial<Record<WebflowTag, string>> {
+  const allowed = new Set<WebflowTag>(["NLP Labeling", "Labeling", "AI Industry", "Datasaur"]);
+  const result: Partial<Record<WebflowTag, string>> = {};
+  const seen = new Set<unknown>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) return void value.forEach(visit);
+    const record = value as Record<string, unknown>;
+    const id = text(record.id);
+    const fieldData = isRecord(record.fieldData) ? record.fieldData : record;
+    const name = text(fieldData.name) ?? text(fieldData["displayName"]);
+    if (id && name && allowed.has(name as WebflowTag)) result[name as WebflowTag] = id;
+    Object.values(record).forEach(visit);
+  };
+  visit(data);
+  return result;
 }
 
 function requireField(fields: SchemaField[], label: string): SchemaField {
@@ -204,12 +233,19 @@ export function markdownToWebflowHtml(markdown: string): string {
       continue;
     }
     const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
+    const italicHeading = line.match(/^\s*(?:\*([^*]+)\*|_([^_]+)_)\s*$/);
+    if (heading || italicHeading) {
       flushParagraph();
       flushList();
-      const marks = heading[1] ?? "";
-      const headingText = heading[2] ?? "";
-      blocks.push(`<h${marks.length}>${inlineMarkdown(headingText)}</h${marks.length}>`);
+      if (heading) {
+        const marks = heading[1] ?? "";
+        const headingText = heading[2] ?? "";
+        blocks.push(`<h${marks.length}>${inlineMarkdown(headingText)}</h${marks.length}>`);
+      } else {
+        // A standalone italic source line is an existing editorial heading signal.
+        // Convert only that signal to H2; do not infer headings from normal prose.
+        blocks.push(`<h2>${inlineMarkdown(italicHeading?.[1] ?? italicHeading?.[2] ?? "")}</h2>`);
+      }
       continue;
     }
     const unordered = line.match(/^\s*[-*+]\s+(.+)$/);
@@ -255,6 +291,7 @@ export function createExtractivePostSummary(body: string): string {
 /** Builds a fixed contract and stops whenever the selected collection is not safe to write. */
 export function createWebflowDraftContract(input: {
   collectionId: string;
+  categoryItemIds?: Partial<Record<WebflowTag, string>>;
   schema: unknown;
 }): WebflowDraftContract {
   const { collectionId, schema } = input;
@@ -264,6 +301,7 @@ export function createWebflowDraftContract(input: {
   const summaryField = findField(fields, "Post Summary");
   const writerField = requireField(fields, "Writer");
   const tagField = requireField(fields, "Tag");
+  const categoryField = findField(fields, "Category");
   const mainImageField = findField(fields, "Main Image");
   const thumbnailImageField = findField(fields, "Thumbnail Image");
   const publicationDateField = findField(fields, "Publication Date") ?? findField(fields, "Created On (Inputted)");
@@ -272,13 +310,14 @@ export function createWebflowDraftContract(input: {
   if (summaryField) requireOneOf(summaryField, ["PlainText"], "Post Summary");
   requireOneOf(writerField, ["PlainText"], "Writer");
   requireOneOf(tagField, ["Option"], "Tag");
+  if (categoryField) requireOneOf(categoryField, ["Reference", "MultiReference", "ItemRef"], "Category");
   if (publicationDateField) requireOneOf(publicationDateField, ["Date", "Date/Time", "DateTime", "PlainText"], publicationDateField.displayName);
   if (sourceUrlField) requireOneOf(sourceUrlField, ["Link", "PlainText"], sourceUrlField.displayName);
   for (const field of [mainImageField, thumbnailImageField]) {
     if (field) requireOneOf(field, ["Image", "ImageRef"], field.displayName);
   }
 
-  const knownRequired = new Set(["postbody", "postsummary", "writer", "tag", "mainimage", "thumbnailimage", "publicationdate", "createdoninputted", "sourceurl", "name", "slug"]);
+  const knownRequired = new Set(["postbody", "postsummary", "writer", "tag", "category", "mainimage", "thumbnailimage", "publicationdate", "createdoninputted", "sourceurl", "name", "slug"]);
   const unexpectedRequired = fields.filter((field) => field.isRequired && !knownRequired.has(normalize(field.displayName)) && !knownRequired.has(normalize(field.slug)));
   if (unexpectedRequired.length > 0) {
     throw new Error(`The selected CMS schema has required field(s) Slackflow will not guess: ${unexpectedRequired.map((field) => field.displayName).join(", ")}.`);
@@ -297,14 +336,18 @@ export function createWebflowDraftContract(input: {
     approvedBlankFields: ["Featured?", "Color", "Writer Profile Image", "Category", "Slide Show Popup", "Created On (Inputted)"]
       .filter((label) => !mappedOptionalLabels.has(normalize(label))),
     body: { slug: bodyField.slug, type: bodyField.type },
+    category: categoryField ? { itemIds: input.categoryItemIds ?? {}, slug: categoryField.slug, type: categoryField.type } : undefined,
     collectionId,
-    imageFieldSlugs: [mainImageField, thumbnailImageField].flatMap((field) => field ? [field.slug] : []),
+    images: {
+      ...(mainImageField ? { main: { slug: mainImageField.slug } } : {}),
+      ...(thumbnailImageField ? { thumbnail: { slug: thumbnailImageField.slug } } : {})
+    },
     publicationDate: publicationDateField ? { isRequired: publicationDateField.isRequired, slug: publicationDateField.slug, type: publicationDateField.type } : undefined,
     schemaFingerprint: schemaFingerprint(schema),
     summary: summaryField ? { slug: summaryField.slug, type: summaryField.type } : undefined,
     sourceUrl: sourceUrlField ? { isRequired: sourceUrlField.isRequired, slug: sourceUrlField.slug, type: sourceUrlField.type } : undefined,
     tag: { optionIds, slug: tagField.slug },
-    version: 1,
+    version: 2,
     writer: { slug: writerField.slug, value: DEFAULT_WEBFLOW_WRITER }
   };
 }
@@ -327,6 +370,13 @@ export function createWebflowDraftMapping(input: {
   if (!title || !body || !tag) throw new Error("The reviewed proposal is missing a required title, body, or tag.");
   const tagOptionId = contract.tag.optionIds[tag];
   if (!tagOptionId) throw new Error(`The selected CMS contract does not allow the Tag value ${tag}.`);
+  const categoryItemId = contract.category?.itemIds[tag];
+  if (contract.category?.type && contract.category.itemIds && Object.keys(contract.category.itemIds).length > 0 && !categoryItemId) {
+    throw new Error(`The selected CMS Category field has no verified item for ${tag}.`);
+  }
+  if (contract.category?.type && !categoryItemId && contract.category && Object.keys(contract.category.itemIds).length === 0) {
+    throw new Error("Slackflow could not verify any compatible Category items. Run @slackflow schema again.");
+  }
 
   const slug = slugFromTitle(title);
   const bodyValue = normalize(contract.body.type) === normalize("RichText") ? markdownToWebflowHtml(body) : body;
@@ -349,20 +399,31 @@ export function createWebflowDraftMapping(input: {
       ...(contract.publicationDate && publicationDate ? { [contract.publicationDate.slug]: publicationDate } : {}),
       [contract.writer.slug]: contract.writer.value,
       [contract.tag.slug]: tagOptionId,
+      ...(contract.category && categoryItemId
+        ? { [contract.category.slug]: normalize(contract.category.type) === normalize("MultiReference") ? [categoryItemId] : categoryItemId }
+        : {}),
       ...(contract.sourceUrl && sourceUrl ? { [contract.sourceUrl.slug]: sourceUrl } : {})
     },
-    imageFieldSlugs: contract.imageFieldSlugs,
+    imageFieldSlugs: {
+      ...(contract.images.main ? { main: contract.images.main.slug } : {}),
+      ...(contract.images.thumbnail ? { thumbnail: contract.images.thumbnail.slug } : {})
+    },
     schemaFingerprint: contract.schemaFingerprint
   };
 }
 
-/** Applies the one already-reviewed asset to every verified CMS image field. */
-export function applyWebflowImageToDraft(mapping: WebflowDraftMapping, asset: { id: string; url?: string; altText: string }): Record<string, unknown> {
-  if (mapping.imageFieldSlugs.length === 0) return mapping.fieldData;
-  if (!asset.url) throw new Error("Webflow did not return a hosted URL for the uploaded image asset.");
-  const imageValue = { alt: asset.altText, fileId: asset.id, url: asset.url };
-  return Object.fromEntries([
-    ...Object.entries(mapping.fieldData),
-    ...mapping.imageFieldSlugs.map((slug) => [slug, imageValue])
-  ]);
+/** Maps the reviewed thumbnail and derived banner to their matching verified CMS fields. */
+export function applyWebflowImagesToDraft(
+  mapping: WebflowDraftMapping,
+  assets: { main?: { id: string; url?: string; altText: string }; thumbnail?: { id: string; url?: string; altText: string } }
+): Record<string, unknown> {
+  const fieldData = { ...mapping.fieldData };
+  for (const kind of ["main", "thumbnail"] as const) {
+    const slug = mapping.imageFieldSlugs[kind];
+    if (!slug) continue;
+    const asset = assets[kind];
+    if (!asset?.url) throw new Error(`Webflow did not return a hosted URL for the ${kind} image asset.`);
+    fieldData[slug] = { alt: asset.altText, fileId: asset.id, url: asset.url };
+  }
+  return fieldData;
 }

@@ -33,7 +33,7 @@ test("creates exactly one CMS draft in the MCP bulk fieldData array", () => {
   assert.deepEqual(createWebflowCollectionDraftAction("collection-1", { name: "New draft", slug: "new-draft" }), {
     create_collection_items: {
       collection_id: "collection-1",
-      request: { fieldData: [{ name: "New draft", slug: "new-draft" }] }
+      request: { fieldData: [{ name: "New draft", slug: "new-draft" }], isDraft: true }
     }
   });
 });
